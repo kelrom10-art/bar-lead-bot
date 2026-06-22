@@ -6,8 +6,10 @@
 import os
 import sqlite3
 import logging
+import threading
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -141,24 +143,14 @@ def followup_kb(lead_id):
 # ── פקודות ──────────────────────────────────────────────────────────────────
 
 HELP_TEXT = (
-    "👋 *שלום! אני בוט ניהול הלידים שלך* 🍸
-
-"
-    "📌 *הוספת ליד:*
-"
-    "`ליד חדש [שם]`  ← לדוגמא: `ליד חדש אבי כהן`
-
-"
-    "📋 *פקודות:*
-"
-    "/list — כל הלידים הפעילים
-"
-    "/old — לידים שלא טופלו +3 ימים
-"
-    "/summary — דוח שבועי וחודשי
-"
-    "/export — קובץ CSV של כל הלידים
-"
+    "👋 *שלום! אני בוט ניהול הלידים שלך* 🍸\n\n"
+    "📌 *הוספת ליד:*\n"
+    "`ליד חדש [שם]`  ← לדוגמא: `ליד חדש אבי כהן`\n\n"
+    "📋 *פקודות:*\n"
+    "/list — כל הלידים הפעילים\n"
+    "/old — לידים שלא טופלו +3 ימים\n"
+    "/summary — דוח שבועי וחודשי\n"
+    "/export — קובץ CSV של כל הלידים\n"
     "/help — תפריט זה"
 )
 
@@ -169,8 +161,7 @@ async def cmd_list(u, ctx):
     leads = get_active_leads()
     if not leads:
         await u.message.reply_text("✅ אין לידים פעילים כרגע!"); return
-    lines = [f"📋 *לידים פעילים ({len(leads)}):*
-"]
+    lines = [f"📋 *לידים פעילים ({len(leads)}):*\n"]
     for ld in leads:
         emoji = STATUS_EMOJI.get(ld["status"], "❓")
         days  = (datetime.now(TZ) - datetime.strptime(ld["created_at"], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=TZ)).days
@@ -179,8 +170,7 @@ async def cmd_list(u, ctx):
             rem  = datetime.strptime(ld["reminder_at"], "%Y-%m-%dT%H:%M:%S")
             line += f" | ⏰ {rem.strftime('%d/%m %H:%M')}"
         lines.append(line)
-    await u.message.reply_text("
-".join(lines), parse_mode="Markdown")
+    await u.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 async def cmd_old(u, ctx):
     leads = get_old_uncontacted(days=3)
@@ -202,23 +192,13 @@ async def cmd_summary(u, ctx):
     active  = get_active_leads()
     rate    = lambda s: f"{s['won_count']/s['total']*100:.0f}%" if s["total"] else "0%"
     await u.message.reply_text(
-        "📊 *דוח ביצועים*
-
-"
-        f"📅 *השבוע האחרון:*
-"
-        f"  לידים: {weekly['total']} | נסגרו: {weekly['won_count']} | אבדו: {weekly['lost']}
-"
-        f"  הכנסות: ₪{weekly['won_amount']:,.0f} | המרה: {rate(weekly)}
-
-"
-        f"📆 *החודש הנוכחי:*
-"
-        f"  לידים: {monthly['total']} | נסגרו: {monthly['won_count']} | אבדו: {monthly['lost']}
-"
-        f"  הכנסות: ₪{monthly['won_amount']:,.0f} | המרה: {rate(monthly)}
-
-"
+        "📊 *דוח ביצועים*\n\n"
+        f"📅 *השבוע האחרון:*\n"
+        f"  לידים: {weekly['total']} | נסגרו: {weekly['won_count']} | אבדו: {weekly['lost']}\n"
+        f"  הכנסות: ₪{weekly['won_amount']:,.0f} | המרה: {rate(weekly)}\n\n"
+        f"📆 *החודש הנוכחי:*\n"
+        f"  לידים: {monthly['total']} | נסגרו: {monthly['won_count']} | אבדו: {monthly['lost']}\n"
+        f"  הכנסות: ₪{monthly['won_amount']:,.0f} | המרה: {rate(monthly)}\n\n"
         f"🟢 *פעילים כרגע: {len(active)}*",
         parse_mode="Markdown",
     )
@@ -241,27 +221,20 @@ async def cmd_export(u, ctx):
         caption=f"📊 ייצוא לידים — {len(leads)} רשומות",
     )
 
-# ── טיפול בטקסט ─────────────────────────────────────────────────────────────
-
 async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     text  = update.message.text.strip()
     state = ctx.user_data.get("state")
-
     if text.startswith("ליד חדש") or text.replace(" ","").startswith("לידחדש"):
         parts = text.split(maxsplit=2)
         if len(parts) < 3:
-            await update.message.reply_text("❓ אנא ציין שם:
-`ליד חדש [שם]`", parse_mode="Markdown"); return
+            await update.message.reply_text("❓ אנא ציין שם:\n`ליד חדש [שם]`", parse_mode="Markdown"); return
         name    = parts[2].strip()
         lead_id = add_lead(name)
         ctx.user_data.clear()
         await update.message.reply_text(
-            f"✅ *{name}* נוסף!
-
-⏰ מתי לתזכר אותך לחזור אליו?",
+            f"✅ *{name}* נוסף!\n\n⏰ מתי לתזכר אותך לחזור אליו?",
             reply_markup=reminder_kb(lead_id), parse_mode="Markdown")
         return
-
     if state == STATE_REMINDER:
         lead_id = ctx.user_data.get("lead_id")
         dt = parse_time(text)
@@ -269,13 +242,11 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             update_lead(lead_id, reminder_at=dt.strftime("%Y-%m-%dT%H:%M:%S"), status="contacted")
             lead = get_lead(lead_id); ctx.user_data.clear()
             await update.message.reply_text(
-                f"⏰ תזכורת נקבעה ל-*{dt.strftime('%d/%m %H:%M')}*
-אחזור אחרי שיחה עם *{lead['name']}* 💪",
+                f"⏰ תזכורת נקבעה ל-*{dt.strftime('%d/%m %H:%M')}*\nאחזור אחרי שיחה עם *{lead['name']}* 💪",
                 parse_mode="Markdown")
         else:
             await update.message.reply_text("❓ נסה: `14:30` | `בעוד 2 שעות` | `מחר 10:00`", parse_mode="Markdown")
         return
-
     if state == STATE_SALE_AMOUNT:
         lead_id = ctx.user_data.get("lead_id")
         try:
@@ -287,14 +258,12 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         except ValueError:
             await update.message.reply_text("❓ הכנס סכום בשקלים (לדוגמא: `3500`)", parse_mode="Markdown")
         return
-
     if state == STATE_LOST_REASON:
         lead_id = ctx.user_data.get("lead_id")
         update_lead(lead_id, status="lost", notes=text, reminder_at=None)
         lead = get_lead(lead_id); ctx.user_data.clear()
         await update.message.reply_text(f"📝 סיבה נרשמה. *{lead['name']}* סומן כאבוד.", parse_mode="Markdown")
         return
-
     if state == STATE_SNOOZE_TIME:
         lead_id = ctx.user_data.get("lead_id")
         dt = parse_time(text)
@@ -305,80 +274,58 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text("❓ נסה: `14:30` | `מחר 10:00`", parse_mode="Markdown")
         return
-
-    await update.message.reply_text("💬 לא הבנתי.
-`ליד חדש [שם]` | /help", parse_mode="Markdown")
-
-# ── CallbackQuery ────────────────────────────────────────────────────────────
+    await update.message.reply_text("💬 לא הבנתי.\n`ליד חדש [שם]` | /help", parse_mode="Markdown")
 
 async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q    = update.callback_query
     await q.answer()
     data = q.data
-
     if data.startswith("rem_"):
         _, lid, option = data.split("_", 2)
         lead_id = int(lid)
         lead    = get_lead(lead_id)
         now     = datetime.now(TZ)
-        if option == "1h":        dt = now + timedelta(hours=1)
-        elif option == "2h":      dt = now + timedelta(hours=2)
+        if option == "1h":         dt = now + timedelta(hours=1)
+        elif option == "2h":       dt = now + timedelta(hours=2)
         elif option == "tomorrow": dt = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
         elif option == "manual":
             ctx.user_data.update({"state": STATE_REMINDER, "lead_id": lead_id})
             await q.edit_message_text(
-                f"⏰ מתי לתזכר אותך לגבי *{lead['name']}*?
-
-נסה: `14:30` | `בעוד 2 שעות` | `מחר 10:00`",
+                f"⏰ מתי לתזכר אותך לגבי *{lead['name']}*?\n\nנסה: `14:30` | `בעוד 2 שעות` | `מחר 10:00`",
                 parse_mode="Markdown"); return
         else: return
         update_lead(lead_id, reminder_at=dt.strftime("%Y-%m-%dT%H:%M:%S"), status="contacted")
         await q.edit_message_text(
-            f"⏰ תזכורת נקבעה ל-*{dt.strftime('%d/%m %H:%M')}*
-אחזור אחרי שיחה עם *{lead['name']}* 💪",
+            f"⏰ תזכורת נקבעה ל-*{dt.strftime('%d/%m %H:%M')}*\nאחזור אחרי שיחה עם *{lead['name']}* 💪",
             parse_mode="Markdown"); return
-
     if data.startswith("status_"):
         parts   = data.split("_")
         lead_id = int(parts[1])
         action  = "_".join(parts[2:])
         lead    = get_lead(lead_id)
-
         if action == "won":
             ctx.user_data.update({"state": STATE_SALE_AMOUNT, "lead_id": lead_id})
-            await q.edit_message_text(
-                f"🎉 כמה שילם *{lead['name']}*?
-_(הכנס סכום בשקלים)_", parse_mode="Markdown")
+            await q.edit_message_text(f"🎉 כמה שילם *{lead['name']}*?\n_(הכנס סכום בשקלים)_", parse_mode="Markdown")
         elif action == "lost":
             ctx.user_data.update({"state": STATE_LOST_REASON, "lead_id": lead_id})
-            await q.edit_message_text(
-                f"😞 מה הסיבה שאבדת את *{lead['name']}*?
-_(כתוב בקצרה)_", parse_mode="Markdown")
+            await q.edit_message_text(f"😞 מה הסיבה שאבדת את *{lead['name']}*?\n_(כתוב בקצרה)_", parse_mode="Markdown")
         elif action == "snooze":
             dt = datetime.now(TZ) + timedelta(hours=1)
             update_lead(lead_id, reminder_at=dt.strftime("%Y-%m-%dT%H:%M:%S"))
             await q.edit_message_text(f"⏰ תזכורת נדחתה — אחזור ב-*{dt.strftime('%H:%M')}* 👍", parse_mode="Markdown")
         elif action == "snooze_manual":
             ctx.user_data.update({"state": STATE_SNOOZE_TIME, "lead_id": lead_id})
-            await q.edit_message_text(
-                f"⏰ מתי לתזכר אותך שוב לגבי *{lead['name']}*?
-נסה: `17:00` | `מחר 10:00`", parse_mode="Markdown")
+            await q.edit_message_text(f"⏰ מתי לתזכר אותך שוב לגבי *{lead['name']}*?\nנסה: `17:00` | `מחר 10:00`", parse_mode="Markdown")
         elif action == "contacted":
             update_lead(lead_id, status="contacted")
-            await q.edit_message_text(
-                f"📞 מתי לתזכר אותך לגבי *{lead['name']}*?",
+            await q.edit_message_text(f"📞 מתי לתזכר אותך לגבי *{lead['name']}*?",
                 reply_markup=reminder_kb(lead_id), parse_mode="Markdown")
-
-# ── משימות מתוזמנות ──────────────────────────────────────────────────────────
 
 async def job_check_reminders(app):
     for ld in get_pending_reminders():
         try:
-            await app.bot.send_message(
-                chat_id=OWNER_CHAT_ID,
-                text=f"⏰ *תזכורת: {ld['name']}*
-
-האם הצלחת לסגור עסקה?",
+            await app.bot.send_message(chat_id=OWNER_CHAT_ID,
+                text=f"⏰ *תזכורת: {ld['name']}*\n\nהאם הצלחת לסגור עסקה?",
                 reply_markup=followup_kb(ld["id"]), parse_mode="Markdown")
             update_lead(ld["id"], reminder_at=None, reminder_count=ld["reminder_count"]+1)
         except Exception as e: logger.error(f"reminder error {ld['id']}: {e}")
@@ -388,8 +335,7 @@ async def job_morning_briefing(app):
     old    = get_old_uncontacted(days=3)
     if not active and not old: return
     now   = datetime.now(TZ)
-    lines = [f"☀️ *בוקר טוב! — {now.strftime('%d/%m/%Y')}*
-"]
+    lines = [f"☀️ *בוקר טוב! — {now.strftime('%d/%m/%Y')}*\n"]
     if active:
         lines.append(f"📋 *לידים פעילים: {len(active)}*")
         for ld in active[:8]:
@@ -399,57 +345,33 @@ async def job_morning_briefing(app):
                 line += f" ⏰ {rem.strftime('%d/%m %H:%M')}"
             lines.append(line)
         if len(active) > 8: lines.append(f"_...ועוד {len(active)-8}_")
-    if old: lines.append(f"
-⚠️ *{len(old)} לידים ישנים — שלח /old*")
-    await app.bot.send_message(chat_id=OWNER_CHAT_ID, text="
-".join(lines), parse_mode="Markdown")
+    if old: lines.append(f"\n⚠️ *{len(old)} לידים ישנים — שלח /old*")
+    await app.bot.send_message(chat_id=OWNER_CHAT_ID, text="\n".join(lines), parse_mode="Markdown")
 
 async def job_old_leads_alert(app):
     old = get_old_uncontacted(days=3)
     if not old: return
-    names = "
-".join(f"• {ld['name']}" for ld in old)
-    await app.bot.send_message(
-        chat_id=OWNER_CHAT_ID,
-        text=f"⚠️ *{len(old)} לידים לא טופלו מעל 3 ימים:*
-
-{names}
-
-שלח /old לטיפול",
+    names = "\n".join(f"• {ld['name']}" for ld in old)
+    await app.bot.send_message(chat_id=OWNER_CHAT_ID,
+        text=f"⚠️ *{len(old)} לידים לא טופלו מעל 3 ימים:*\n\n{names}\n\nשלח /old לטיפול",
         parse_mode="Markdown")
 
 async def job_weekly_report(app):
     s    = get_stats(datetime.now(TZ) - timedelta(days=7))
     rate = f"{s['won_count']/s['total']*100:.0f}%" if s["total"] else "0%"
-    await app.bot.send_message(
-        chat_id=OWNER_CHAT_ID,
-        text=(f"📊 *דוח שבועי*
-
-"
-              f"  לידים: {s['total']} | נסגרו: {s['won_count']} | אבדו: {s['lost']}
-"
-              f"  הכנסות: ₪{s['won_amount']:,.0f} | המרה: {rate}
-
-שבוע מוצלח! 🍸"),
+    await app.bot.send_message(chat_id=OWNER_CHAT_ID,
+        text=(f"📊 *דוח שבועי*\n\n  לידים: {s['total']} | נסגרו: {s['won_count']} | אבדו: {s['lost']}\n"
+              f"  הכנסות: ₪{s['won_amount']:,.0f} | המרה: {rate}\n\nשבוע מוצלח! 🍸"),
         parse_mode="Markdown")
 
 async def job_monthly_report(app):
     now  = datetime.now(TZ)
     s    = get_stats(now.replace(day=1, hour=0, minute=0, second=0))
     rate = f"{s['won_count']/s['total']*100:.0f}%" if s["total"] else "0%"
-    await app.bot.send_message(
-        chat_id=OWNER_CHAT_ID,
-        text=(f"📆 *דוח חודשי — {now.strftime('%m/%Y')}*
-
-"
-              f"  לידים: {s['total']} | נסגרו: {s['won_count']} | אבדו: {s['lost']}
-"
-              f"  הכנסות: ₪{s['won_amount']:,.0f} | המרה: {rate}
-
-חודש מוצלח! 💪"),
+    await app.bot.send_message(chat_id=OWNER_CHAT_ID,
+        text=(f"📆 *דוח חודשי — {now.strftime('%m/%Y')}*\n\n  לידים: {s['total']} | נסגרו: {s['won_count']} | אבדו: {s['lost']}\n"
+              f"  הכנסות: ₪{s['won_amount']:,.0f} | המרה: {rate}\n\nחודש מוצלח! 💪"),
         parse_mode="Markdown")
-
-# ── הרצה ────────────────────────────────────────────────────────────────────
 
 def main():
     if not BOT_TOKEN:     raise ValueError("BOT_TOKEN לא הוגדר!")
@@ -473,6 +395,15 @@ def main():
     s.add_job(job_weekly_report,    "cron",     day_of_week="sun", hour=10, args=[app])
     s.add_job(job_monthly_report,   "cron",     day=1,   hour=10,           args=[app])
     s.start(); logger.info("Scheduler ✓")
+
+    class _Health(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200); self.end_headers(); self.wfile.write(b"OK")
+        def log_message(self, *a): pass
+
+    port = int(os.getenv("PORT", 8080))
+    t = threading.Thread(target=lambda: HTTPServer(("0.0.0.0", port), _Health).serve_forever(), daemon=True)
+    t.start(); logger.info(f"Health server ✓ :{port}")
 
     logger.info("בוט עולה 🚀")
     app.run_polling(drop_pending_updates=True)
