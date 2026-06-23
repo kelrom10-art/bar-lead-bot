@@ -4,12 +4,14 @@
 Google Sheets (אחסון) + Google Calendar (תזכורות)
 """
 
-import os, json, base64, logging, threading, uuid
+import io, os, json, base64, logging, threading, uuid
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 import gspread
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 
@@ -54,10 +56,18 @@ HEADERS = [
     "cal_event_id", "follow_up_time",
 ]
 
+# כל כפתורי התפריט — לזיהוי ביטול שיחה באמצע
+MENU_BUTTONS = {
+    "➕ הוספת ליד", "📋 לידים ישנים", "📊 סיכום", "⏰ תזכורות פעילות",
+    "📅 היום", "🔍 חיפוש ליד", "📤 יצוא Excel", "✏️ עריכת ליד",
+}
+
 MAIN_MENU = ReplyKeyboardMarkup(
     [
         [KeyboardButton("➕ הוספת ליד"),      KeyboardButton("📋 לידים ישנים")],
         [KeyboardButton("📊 סיכום"),           KeyboardButton("⏰ תזכורות פעילות")],
+        [KeyboardButton("📅 היום"),            KeyboardButton("🔍 חיפוש ליד")],
+        [KeyboardButton("📤 יצוא Excel"),      KeyboardButton("✏️ עריכת ליד")],
     ],
     resize_keyboard=True,
     is_persistent=True,
@@ -65,6 +75,10 @@ MAIN_MENU = ReplyKeyboardMarkup(
 
 _sheet = None
 _cal   = None
+
+# ═══════════════════════════════════════════════
+#  Google API helpers
+# ═══════════════════════════════════════════════
 
 def _get_creds():
     raw = GOOGLE_CREDS_JSON
@@ -90,6 +104,10 @@ def init_google():
     if not _sheet.row_values(1) or _sheet.cell(1, 1).value != "id":
         _sheet.insert_row(HEADERS, 1)
     logger.info("Google APIs ✓")
+
+# ═══════════════════════════════════════════════
+#  Sheets CRUD
+# ═══════════════════════════════════════════════
 
 def _now():
     return datetime.now(TZ).strftime("%Y-%m-%dT%H:%M:%S")
@@ -121,6 +139,11 @@ def update_lead(lid, **kw):
         if k in HEADERS:
             _sheet.update_cell(row, _col(k), "" if v is None else str(v))
 
+def delete_lead(lid):
+    row = _find_row(lid)
+    if row:
+        _sheet.delete_rows(row)
+
 def get_lead(lid):
     return next((r for r in _rows() if str(r.get("id")) == str(lid)), None)
 
@@ -129,8 +152,30 @@ def get_active_leads():
             if r.get("status") in (ST_NEW, ST_PRE_REMINDED, ST_CALLED, ST_FOLLOW_UP)
             and r.get("name")]
 
+def get_today_leads():
+    today = datetime.now(TZ).date()
+    out = []
+    for r in _rows():
+        ct = str(r.get("call_time") or "")
+        if not ct:
+            continue
+        try:
+            dt = datetime.strptime(ct[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=TZ)
+            if dt.date() == today and r.get("status") in (ST_NEW, ST_PRE_REMINDED, ST_CALLED, ST_FOLLOW_UP):
+                out.append(r)
+        except Exception:
+            pass
+    out.sort(key=lambda x: x.get("call_time", ""))
+    return out
+
 def get_old_leads():
     return [r for r in _rows() if r.get("status") == ST_OLD and r.get("name")]
+
+def search_leads(query):
+    q = query.lower().strip()
+    return [r for r in _rows()
+            if q in str(r.get("name", "")).lower()
+            or q in str(r.get("phone", "")).lower()]
 
 def get_leads_pre_reminder():
     now = datetime.now(TZ)
@@ -183,6 +228,58 @@ def get_stats(since_dt):
         "old":        len([r for r in rows if r.get("status") == ST_OLD]),
     }
 
+# ═══════════════════════════════════════════════
+#  Excel export
+# ═══════════════════════════════════════════════
+
+def build_excel():
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "לידים"
+
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill("solid", fgColor="2B579A")
+    center      = Alignment(horizontal="center")
+
+    col_labels = ["מזהה", "שם", "טלפון", "שעת שיחה", "סטטוס",
+                  "סכום מכירה", "הערות", "נוצר", "עודכן"]
+    col_keys   = ["id", "name", "phone", "call_time", "status",
+                  "sale_amount", "notes", "created_at", "updated_at"]
+    status_heb = {
+        ST_NEW: "חדש", ST_PRE_REMINDED: "תזכורת נשלחה", ST_CALLED: "עובד",
+        ST_WON: "נסגר ✅", ST_LOST: "אבד ❌", ST_FOLLOW_UP: "המשך טיפול",
+        ST_OLD: "ישן",
+    }
+
+    for ci, label in enumerate(col_labels, 1):
+        cell = ws.cell(row=1, column=ci, value=label)
+        cell.font = header_font; cell.fill = header_fill; cell.alignment = center
+
+    for ri, row in enumerate(_rows(), 2):
+        for ci, key in enumerate(col_keys, 1):
+            val = row.get(key, "")
+            if key == "status":
+                val = status_heb.get(str(val), str(val))
+            elif key in ("call_time", "created_at", "updated_at") and val:
+                try:
+                    val = datetime.strptime(str(val)[:19], "%Y-%m-%dT%H:%M:%S").strftime("%d/%m/%Y %H:%M")
+                except Exception:
+                    pass
+            ws.cell(row=ri, column=ci, value=str(val) if val else "")
+
+    for col in ws.columns:
+        max_len = max((len(str(c.value or "")) for c in col), default=0)
+        ws.column_dimensions[col[0].column_letter].width = min(max_len + 4, 40)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf
+
+# ═══════════════════════════════════════════════
+#  Google Calendar helpers
+# ═══════════════════════════════════════════════
+
 def cal_create(lid, name, phone, call_dt):
     try:
         ev = {
@@ -193,7 +290,6 @@ def cal_create(lid, name, phone, call_dt):
             "reminders": {"useDefault": False, "overrides": [{"method": "popup", "minutes": 20}]},
         }
         res = _cal.events().insert(calendarId=CALENDAR_ID, body=ev).execute()
-        logger.info(f"אירוע יומן נוצר: {res['id']}")
         return res["id"]
     except Exception as e:
         logger.error(f"cal_create: {e}"); return None
@@ -214,6 +310,10 @@ def cal_delete(event_id):
         _cal.events().delete(calendarId=CALENDAR_ID, eventId=event_id).execute()
     except Exception as e:
         logger.error(f"cal_delete: {e}")
+
+# ═══════════════════════════════════════════════
+#  Parse time string
+# ═══════════════════════════════════════════════
 
 def parse_time(text):
     now = datetime.now(TZ)
@@ -250,6 +350,16 @@ def parse_time(text):
         except: pass
     return None
 
+def validate_phone(phone):
+    digits = "".join(c for c in phone if c.isdigit())
+    if digits.startswith("972"):
+        digits = "0" + digits[3:]
+    return len(digits) == 10 and digits.startswith("05")
+
+# ═══════════════════════════════════════════════
+#  Inline keyboards
+# ═══════════════════════════════════════════════
+
 def outcome_kb(lid):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ נסגר! 🎉",       callback_data=f"out_{lid}_won")],
@@ -265,22 +375,47 @@ def snooze_kb(lid):
         [InlineKeyboardButton("קבע ידנית ✏️",  callback_data=f"snz_{lid}_manual")],
     ])
 
+def edit_field_kb(lid):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("👤 שינוי שם",        callback_data=f"edf_{lid}_name")],
+        [InlineKeyboardButton("📱 שינוי טלפון",      callback_data=f"edf_{lid}_phone")],
+        [InlineKeyboardButton("📅 שינוי שעת שיחה",  callback_data=f"edf_{lid}_time")],
+        [InlineKeyboardButton("🗑 מחיקת ליד",       callback_data=f"edf_{lid}_delete")],
+    ])
+
+# ═══════════════════════════════════════════════
+#  ConversationHandler — הוספת ליד
+# ═══════════════════════════════════════════════
+
 async def add_start(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data.clear()
-    await u.message.reply_text("👤 *מה שם הלקוח?*", parse_mode="Markdown")
+    await u.message.reply_text(
+        "👤 *מה שם הלקוח?*\n\n_שלח /cancel לביטול_",
+        parse_mode="Markdown")
     return ASK_NAME
 
 async def got_name(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    ctx.user_data["name"] = u.message.text.strip()
+    name = u.message.text.strip()
+    if name in MENU_BUTTONS:
+        return await cancel_add(u, ctx)
+    ctx.user_data["name"] = name
     await u.message.reply_text(
-        f"✅ שם: *{ctx.user_data['name']}*\n\n📱 *מה מספר הטלפון?*",
+        f"✅ שם: *{name}*\n\n📱 *מה מספר הטלפון?*\n_לדוגמא: 0501234567_",
         parse_mode="Markdown")
     return ASK_PHONE
 
 async def got_phone(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    ctx.user_data["phone"] = u.message.text.strip()
+    phone = u.message.text.strip()
+    if phone in MENU_BUTTONS:
+        return await cancel_add(u, ctx)
+    if not validate_phone(phone):
+        await u.message.reply_text(
+            "❌ מספר טלפון לא תקין!\nנא להכניס מספר ישראלי: *0501234567*",
+            parse_mode="Markdown")
+        return ASK_PHONE
+    ctx.user_data["phone"] = phone
     await u.message.reply_text(
-        f"✅ טלפון: *{ctx.user_data['phone']}*\n\n"
+        f"✅ טלפון: *{phone}*\n\n"
         "📅 *מתי השיחה?*\n"
         "_לדוגמא:_\n"
         "`16:30` — היום בשעה 16:30\n"
@@ -291,7 +426,10 @@ async def got_phone(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
     return ASK_TIME
 
 async def got_time(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    call_dt = parse_time(u.message.text.strip())
+    text = u.message.text.strip()
+    if text in MENU_BUTTONS:
+        return await cancel_add(u, ctx)
+    call_dt = parse_time(text)
     if not call_dt:
         await u.message.reply_text(
             "❓ לא הבנתי. נסה:\n`16:30` | `מחר 10:00` | `25/06 15:30`",
@@ -318,8 +456,14 @@ async def got_time(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def cancel_add(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data.clear()
-    await u.message.reply_text("❌ בוטל.", reply_markup=MAIN_MENU)
+    msg = u.message
+    if msg:
+        await msg.reply_text("❌ הוספת ליד בוטלה.", reply_markup=MAIN_MENU)
     return ConversationHandler.END
+
+# ═══════════════════════════════════════════════
+#  Command: /start
+# ═══════════════════════════════════════════════
 
 async def cmd_start(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await u.message.reply_text(
@@ -328,12 +472,35 @@ async def cmd_start(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
         reply_markup=MAIN_MENU,
     )
 
+# ═══════════════════════════════════════════════
+#  Menu handlers
+# ═══════════════════════════════════════════════
+
+async def show_today(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    leads = get_today_leads()
+    if not leads:
+        await u.message.reply_text("📅 אין שיחות מתוכננות להיום! 🎉", reply_markup=MAIN_MENU)
+        return
+    lines = [f"📅 *שיחות להיום — {datetime.now(TZ).strftime('%d/%m/%Y')} ({len(leads)}):*\n"]
+    for ld in leads:
+        ct = str(ld.get("call_time", ""))
+        t  = ""
+        try:
+            t = datetime.strptime(ct[:19], "%Y-%m-%dT%H:%M:%S").strftime("%H:%M")
+        except Exception:
+            pass
+        lines.append(
+            f"🕐 *{t}* — {STATUS_EMOJI.get(ld.get('status'), '❓')} "
+            f"*{ld['name']}* | 📱{ld.get('phone', '—')}"
+        )
+    await u.message.reply_text("\n".join(lines), parse_mode="Markdown", reply_markup=MAIN_MENU)
+
 async def show_old_leads(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
     old = get_old_leads()
     if not old:
         await u.message.reply_text("📁 אין לידים ישנים.", reply_markup=MAIN_MENU); return
     await u.message.reply_text(
-        f"📁 *לידים ישנים ({len(old)}):*\n_מעוניינים אבל לא נסגרו — לחץ לחזרה_",
+        f"📁 *לידים ישנים ({len(old)}):*",
         parse_mode="Markdown")
     for ld in old:
         ct       = str(ld.get("call_time", "") or "")
@@ -356,9 +523,13 @@ async def show_reminders(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
         ct = str(ld.get("call_time") or ld.get("follow_up_time") or "")
         t  = ""
         if ct:
-            try: t = f" | ⏰ {datetime.strptime(ct[:19], '%Y-%m-%dT%H:%M:%S').strftime('%d/%m %H:%M')}"
+            try:
+                t = f" | ⏰ {datetime.strptime(ct[:19], '%Y-%m-%dT%H:%M:%S').strftime('%d/%m %H:%M')}"
             except: pass
-        lines.append(f"{STATUS_EMOJI.get(ld.get('status'),'❓')} *{ld['name']}* — 📱{ld.get('phone','—')}{t}")
+        lines.append(
+            f"{STATUS_EMOJI.get(ld.get('status'),'❓')} *{ld['name']}* "
+            f"— 📱{ld.get('phone','—')}{t}"
+        )
     await u.message.reply_text("\n".join(lines), parse_mode="Markdown", reply_markup=MAIN_MENU)
 
 async def show_summary(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -379,9 +550,56 @@ async def show_summary(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
         reply_markup=MAIN_MENU,
     )
 
+async def start_search(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    ctx.user_data["state"] = "searching"
+    await u.message.reply_text(
+        "🔍 *חיפוש ליד*\n\nהכנס שם או מספר טלפון:",
+        parse_mode="Markdown")
+
+async def export_excel(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    await u.message.reply_text("⏳ מכין קובץ Excel...", reply_markup=MAIN_MENU)
+    try:
+        buf   = build_excel()
+        fname = f"leads_{datetime.now(TZ).strftime('%d%m%Y_%H%M')}.xlsx"
+        await u.message.reply_document(
+            document=buf,
+            filename=fname,
+            caption=f"📊 כל הלידים — {datetime.now(TZ).strftime('%d/%m/%Y %H:%M')}")
+    except Exception as e:
+        logger.error(f"export_excel: {e}")
+        await u.message.reply_text(f"❌ שגיאה ביצירת קובץ: {e}")
+
+async def start_edit(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    active = get_active_leads()
+    if not active:
+        await u.message.reply_text("❌ אין לידים פעילים לעריכה.", reply_markup=MAIN_MENU)
+        return
+    buttons = []
+    for ld in active[:10]:
+        ct = str(ld.get("call_time", ""))
+        t  = ""
+        try:
+            t = f" {datetime.strptime(ct[:19], '%Y-%m-%dT%H:%M:%S').strftime('%d/%m %H:%M')}"
+        except: pass
+        buttons.append([InlineKeyboardButton(
+            f"{STATUS_EMOJI.get(ld.get('status'), '❓')} {ld['name']}{t}",
+            callback_data=f"edit_{ld['id']}"
+        )])
+    await u.message.reply_text(
+        "✏️ *בחר ליד לעריכה:*",
+        reply_markup=InlineKeyboardMarkup(buttons),
+        parse_mode="Markdown")
+
+# ═══════════════════════════════════════════════
+#  Main text router
+# ═══════════════════════════════════════════════
+
 async def handle_text(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
     text  = u.message.text.strip()
     state = ctx.user_data.get("state")
+
+    # ── Ongoing input states ──────────────────
+
     if state == "ask_amount":
         lid = ctx.user_data.get("lid")
         try:
@@ -394,8 +612,10 @@ async def handle_text(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 f"🎉 *כל הכבוד!*\n*{ld['name']}* — עסקה נסגרה\n💰 *₪{amount:,.0f}*",
                 parse_mode="Markdown", reply_markup=MAIN_MENU)
         except ValueError:
-            await u.message.reply_text("❓ הכנס סכום בשקלים (לדוגמא: `3500`)", parse_mode="Markdown")
+            await u.message.reply_text(
+                "❓ הכנס סכום בשקלים (לדוגמא: `3500`)", parse_mode="Markdown")
         return
+
     if state in ("ask_snooze", "ask_recall"):
         lid = ctx.user_data.get("lid")
         dt  = parse_time(text)
@@ -403,7 +623,8 @@ async def handle_text(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
             ld = get_lead(lid)
             if state == "ask_recall":
                 eid = cal_create(lid, ld["name"], ld.get("phone", ""), dt)
-                update_lead(lid, status=ST_NEW, call_time=dt.strftime("%Y-%m-%dT%H:%M:%S"),
+                update_lead(lid, status=ST_NEW,
+                            call_time=dt.strftime("%Y-%m-%dT%H:%M:%S"),
                             cal_event_id=eid or "")
             else:
                 cal_update(ld.get("cal_event_id"), dt)
@@ -417,20 +638,136 @@ async def handle_text(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await u.message.reply_text(
                 "❓ נסה: `16:30` | `מחר 10:00` | `25/06 15:00`", parse_mode="Markdown")
         return
+
+    if state == "searching":
+        results = search_leads(text)
+        ctx.user_data.clear()
+        if not results:
+            await u.message.reply_text(
+                f"🔍 לא נמצאו לידים עבור: *{text}*",
+                parse_mode="Markdown", reply_markup=MAIN_MENU)
+            return
+        await u.message.reply_text(
+            f"🔍 *{len(results)} תוצאות עבור \"{text}\":*",
+            parse_mode="Markdown")
+        for ld in results[:8]:
+            ct  = str(ld.get("call_time", ""))
+            t   = ""
+            try:
+                t = f"\n📅 {datetime.strptime(ct[:19], '%Y-%m-%dT%H:%M:%S').strftime('%d/%m/%Y %H:%M')}"
+            except: pass
+            st = ld.get("status", "")
+            kb = InlineKeyboardMarkup([[
+                InlineKeyboardButton("✏️ עריכה",        callback_data=f"edit_{ld['id']}"),
+                InlineKeyboardButton("📋 עדכן סטטוס",   callback_data=f"out_{ld['id']}_snooze"),
+            ]])
+            await u.message.reply_text(
+                f"{STATUS_EMOJI.get(st, '❓')} *{ld['name']}*\n"
+                f"📱 {ld.get('phone', '—')}{t}",
+                parse_mode="Markdown", reply_markup=kb)
+        return
+
+    if state == "edit_value":
+        lid   = ctx.user_data.get("lid")
+        field = ctx.user_data.get("field")
+        if field == "name":
+            update_lead(lid, name=text)
+            ctx.user_data.clear()
+            await u.message.reply_text(
+                f"✅ שם עודכן ל-*{text}*", parse_mode="Markdown", reply_markup=MAIN_MENU)
+        elif field == "phone":
+            if not validate_phone(text):
+                await u.message.reply_text(
+                    "❌ מספר לא תקין! נסה שוב (לדוגמא: 0501234567)", parse_mode="Markdown")
+                return
+            update_lead(lid, phone=text)
+            ctx.user_data.clear()
+            await u.message.reply_text(
+                f"✅ טלפון עודכן ל-*{text}*", parse_mode="Markdown", reply_markup=MAIN_MENU)
+        elif field == "time":
+            dt = parse_time(text)
+            if not dt:
+                await u.message.reply_text(
+                    "❓ נסה: `16:30` | `מחר 10:00` | `25/06 15:00`", parse_mode="Markdown")
+                return
+            ld = get_lead(lid)
+            cal_update(ld.get("cal_event_id"), dt)
+            update_lead(lid, call_time=dt.strftime("%Y-%m-%dT%H:%M:%S"))
+            ctx.user_data.clear()
+            await u.message.reply_text(
+                f"✅ שעת שיחה עודכנה ל-*{dt.strftime('%d/%m/%Y %H:%M')}*",
+                parse_mode="Markdown", reply_markup=MAIN_MENU)
+        return
+
+    # ── Main menu routing ─────────────────────
+
+    ctx.user_data.clear()
     if "לידים ישנים" in text:
         await show_old_leads(u, ctx)
     elif "סיכום" in text:
         await show_summary(u, ctx)
     elif "תזכורות" in text:
         await show_reminders(u, ctx)
+    elif "היום" in text:
+        await show_today(u, ctx)
+    elif "חיפוש" in text:
+        await start_search(u, ctx)
+    elif "Excel" in text or "יצוא" in text:
+        await export_excel(u, ctx)
+    elif "עריכת ליד" in text:
+        await start_edit(u, ctx)
     else:
         await u.message.reply_text(
             "💬 לחץ על אחת האפשרויות בתפריט 👇", reply_markup=MAIN_MENU)
+
+# ═══════════════════════════════════════════════
+#  Callback handler
+# ═══════════════════════════════════════════════
 
 async def callback_handler(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = u.callback_query
     await q.answer()
     data = q.data
+
+    # ── Edit lead: select lead ────────────────
+    if data.startswith("edit_"):
+        lid = data.replace("edit_", "")
+        ld  = get_lead(lid)
+        if not ld:
+            await q.edit_message_text("❌ ליד לא נמצא"); return
+        ct = str(ld.get("call_time", ""))
+        t  = ""
+        try:
+            t = datetime.strptime(ct[:19], "%Y-%m-%dT%H:%M:%S").strftime("%d/%m/%Y %H:%M")
+        except: pass
+        await q.edit_message_text(
+            f"✏️ *עריכת ליד*\n\n"
+            f"👤 {ld['name']}\n📱 {ld.get('phone', '—')}\n📅 {t}\n\n*מה לשנות?*",
+            reply_markup=edit_field_kb(lid),
+            parse_mode="Markdown")
+        return
+
+    # ── Edit lead: select field ───────────────
+    if data.startswith("edf_"):
+        _, lid, field = data.split("_", 2)
+        ld = get_lead(lid)
+        if not ld:
+            await q.edit_message_text("❌ ליד לא נמצא"); return
+        if field == "delete":
+            cal_delete(ld.get("cal_event_id"))
+            delete_lead(lid)
+            await q.edit_message_text(f"🗑 *{ld['name']}* נמחק.", parse_mode="Markdown")
+            return
+        prompts = {
+            "name":  f"👤 הכנס שם חדש עבור *{ld['name']}*:",
+            "phone": f"📱 הכנס טלפון חדש עבור *{ld['name']}*:",
+            "time":  f"📅 הכנס שעת שיחה חדשה עבור *{ld['name']}*:\n`16:30` | `מחר 10:00` | `25/06 15:00`",
+        }
+        ctx.user_data.update({"state": "edit_value", "lid": lid, "field": field})
+        await q.edit_message_text(prompts.get(field, "?"), parse_mode="Markdown")
+        return
+
+    # ── Outcome buttons ───────────────────────
     if data.startswith("out_"):
         _, lid, action = data.split("_", 2)
         ld = get_lead(lid)
@@ -439,11 +776,13 @@ async def callback_handler(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if action == "won":
             ctx.user_data.update({"state": "ask_amount", "lid": lid})
             await q.edit_message_text(
-                f"🎉 *כמה שילם {ld['name']}?*\n_(הכנס סכום בשקלים)_", parse_mode="Markdown")
+                f"🎉 *כמה שילם {ld['name']}?*\n_(הכנס סכום בשקלים)_",
+                parse_mode="Markdown")
         elif action == "lost":
             cal_delete(ld.get("cal_event_id"))
             update_lead(lid, status=ST_LOST, cal_event_id="")
-            await q.edit_message_text(f"❌ *{ld['name']}* סומן כלא רלוונטי.", parse_mode="Markdown")
+            await q.edit_message_text(
+                f"❌ *{ld['name']}* סומן כלא רלוונטי.", parse_mode="Markdown")
         elif action == "snooze":
             await q.edit_message_text(
                 f"⏰ *{ld['name']}* — מתי לחזור אליו?",
@@ -451,9 +790,12 @@ async def callback_handler(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
         elif action == "old":
             update_lead(lid, status=ST_OLD)
             await q.edit_message_text(
-                f"📁 *{ld['name']}* הועבר ללידים ישנים.\nתוכל לחזור אליו מהתפריט.",
+                f"📁 *{ld['name']}* הועבר ללידים ישנים.",
                 parse_mode="Markdown")
-    elif data.startswith("snz_"):
+        return
+
+    # ── Snooze buttons ────────────────────────
+    if data.startswith("snz_"):
         parts  = data.split("_")
         lid    = parts[1]
         option = "_".join(parts[2:])
@@ -477,13 +819,20 @@ async def callback_handler(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(
             f"⏰ *{ld['name']}* — אחזור ב-*{new_dt.strftime('%d/%m %H:%M')}* 👍",
             parse_mode="Markdown")
-    elif data.startswith("recall_"):
+        return
+
+    # ── Recall from old leads ─────────────────
+    if data.startswith("recall_"):
         lid = data.replace("recall_", "")
         ld  = get_lead(lid)
         ctx.user_data.update({"state": "ask_recall", "lid": lid})
         await q.edit_message_text(
             f"📞 מתי השיחה עם *{ld['name']}*?\n`16:30` | `מחר 10:00` | `25/06 15:00`",
             parse_mode="Markdown")
+
+# ═══════════════════════════════════════════════
+#  Scheduled jobs
+# ═══════════════════════════════════════════════
 
 async def job_check_reminders(app):
     for ld in get_leads_pre_reminder():
@@ -498,7 +847,8 @@ async def job_check_reminders(app):
                 parse_mode="Markdown")
             update_lead(ld["id"], status=ST_PRE_REMINDED)
         except Exception as e:
-            logger.error(f"pre_reminder error [{ld.get('id')}]: {e}")
+            logger.error(f"pre_reminder [{ld.get('id')}]: {e}")
+
     for ld in get_leads_post_call():
         try:
             await app.bot.send_message(
@@ -508,7 +858,8 @@ async def job_check_reminders(app):
                 parse_mode="Markdown")
             update_lead(ld["id"], status=ST_CALLED)
         except Exception as e:
-            logger.error(f"post_call error [{ld.get('id')}]: {e}")
+            logger.error(f"post_call [{ld.get('id')}]: {e}")
+
     for ld in get_leads_followup_due():
         try:
             await app.bot.send_message(
@@ -518,26 +869,32 @@ async def job_check_reminders(app):
                 parse_mode="Markdown")
             update_lead(ld["id"], status=ST_CALLED)
         except Exception as e:
-            logger.error(f"followup_due error [{ld.get('id')}]: {e}")
+            logger.error(f"followup_due [{ld.get('id')}]: {e}")
 
 async def job_morning_briefing(app):
+    today  = get_today_leads()
     active = get_active_leads()
-    old    = get_old_leads()
-    if not active and not old: return
     now    = datetime.now(TZ)
     lines  = [f"☀️ *בוקר טוב! {now.strftime('%d/%m/%Y')}*\n"]
-    if active:
-        lines.append(f"📋 *שיחות ותזכורות ({len(active)}):*")
-        for ld in active[:10]:
-            ct = str(ld.get("call_time") or ld.get("follow_up_time") or "")
+    if today:
+        lines.append(f"📅 *שיחות להיום ({len(today)}):*")
+        for ld in today:
+            ct = str(ld.get("call_time", ""))
             t  = ""
-            if ct:
-                try: t = f" ⏰{datetime.strptime(ct[:19], '%Y-%m-%dT%H:%M:%S').strftime('%H:%M')}"
-                except: pass
-            lines.append(f"{STATUS_EMOJI.get(ld.get('status'), '❓')} *{ld['name']}*{t}")
+            try:
+                t = f" ⏰{datetime.strptime(ct[:19], '%Y-%m-%dT%H:%M:%S').strftime('%H:%M')}"
+            except: pass
+            lines.append(f"🕐 *{ld['name']}*{t} | 📱{ld.get('phone', '—')}")
+    elif active:
+        lines.append(f"📋 *לידים פעילים ({len(active)}):*")
+        for ld in active[:5]:
+            lines.append(f"{STATUS_EMOJI.get(ld.get('status'), '❓')} *{ld['name']}*")
+    old = get_old_leads()
     if old:
         lines.append(f"\n📁 *{len(old)} לידים ישנים* — לחץ 'לידים ישנים'")
-    await app.bot.send_message(chat_id=OWNER_CHAT_ID, text="\n".join(lines), parse_mode="Markdown")
+    if len(lines) > 1:
+        await app.bot.send_message(
+            chat_id=OWNER_CHAT_ID, text="\n".join(lines), parse_mode="Markdown")
 
 async def job_weekly_report(app):
     s    = get_stats(datetime.now(TZ) - timedelta(days=7))
@@ -560,21 +917,31 @@ async def job_monthly_report(app):
              f"💰 הכנסות: ₪{s['won_amount']:,.0f} | המרה: {rate}\n\nחודש מוצלח! 💪",
         parse_mode="Markdown")
 
+# ═══════════════════════════════════════════════
+#  Main
+# ═══════════════════════════════════════════════
+
 def main():
-    if not BOT_TOKEN:      raise ValueError("BOT_TOKEN לא הוגדר!")
-    if not OWNER_CHAT_ID:  raise ValueError("OWNER_CHAT_ID לא הוגדר!")
+    if not BOT_TOKEN:     raise ValueError("BOT_TOKEN לא הוגדר!")
+    if not OWNER_CHAT_ID: raise ValueError("OWNER_CHAT_ID לא הוגדר!")
     init_google()
 
     async def post_init(application: Application) -> None:
         s = AsyncIOScheduler(timezone="Asia/Jerusalem")
-        s.add_job(job_check_reminders,  "interval", minutes=1,                  args=[application])
-        s.add_job(job_morning_briefing, "cron",     hour=9,  minute=0,          args=[application])
-        s.add_job(job_weekly_report,    "cron",     day_of_week="sun", hour=10, args=[application])
-        s.add_job(job_monthly_report,   "cron",     day=1,   hour=10,           args=[application])
+        s.add_job(job_check_reminders,  "interval", minutes=1,                   args=[application])
+        s.add_job(job_morning_briefing, "cron",     hour=9,  minute=0,           args=[application])
+        s.add_job(job_weekly_report,    "cron",     day_of_week="sun", hour=10,  args=[application])
+        s.add_job(job_monthly_report,   "cron",     day=1,   hour=10,            args=[application])
         s.start()
         logger.info("Scheduler ✓")
 
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
+
+    # ביטול שיחה אם לוחצים על כפתור תפריט אחר
+    menu_regex = (
+        "^(📋 לידים ישנים|📊 סיכום|⏰ תזכורות פעילות"
+        "|📅 היום|🔍 חיפוש ליד|📤 יצוא Excel|✏️ עריכת ליד)$"
+    )
 
     conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^➕ הוספת ליד$"), add_start)],
@@ -583,7 +950,10 @@ def main():
             ASK_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_phone)],
             ASK_TIME:  [MessageHandler(filters.TEXT & ~filters.COMMAND, got_time)],
         },
-        fallbacks=[CommandHandler("cancel", cancel_add)],
+        fallbacks=[
+            CommandHandler("cancel", cancel_add),
+            MessageHandler(filters.Regex(menu_regex), cancel_add),
+        ],
         allow_reentry=True,
     )
 
