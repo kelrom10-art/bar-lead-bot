@@ -27,7 +27,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 BOT_TOKEN     = os.getenv("BOT_TOKEN", "")
 OWNER_CHAT_ID = int(os.getenv("OWNER_CHAT_ID", "0"))
 TZ            = ZoneInfo("Asia/Jerusalem")
-DB_PATH       = os.path.join(os.path.dirname(__file__), "leads.db")
+DB_PATH       = os.getenv("DB_PATH", os.path.join(os.path.dirname(__file__), "leads.db"))
 
 logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
