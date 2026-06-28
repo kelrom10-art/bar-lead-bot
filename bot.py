@@ -917,6 +917,17 @@ async def job_monthly_report(app):
              f"💰 הכנסות: ₪{s['won_amount']:,.0f} | המרה: {rate}\n\nחודש מוצלח! 💪",
         parse_mode="Markdown")
 
+async def job_self_ping(app):
+    """פינג עצמי כל 10 דקות — מונע ירידה של Render free tier"""
+    try:
+        import urllib.request
+        url = os.getenv("RENDER_EXTERNAL_URL", "https://bar-lead-bot.onrender.com/")
+        urllib.request.urlopen(url, timeout=15)
+        logger.info("Self-ping ✓")
+    except Exception as e:
+        logger.warning(f"Self-ping: {e}")
+
+
 # ═══════════════════════════════════════════════
 #  Main
 # ═══════════════════════════════════════════════
@@ -944,7 +955,8 @@ def main():
     )
 
     conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex("^➕ הוספת ליד$"), add_start)],
+        entry_points=        s.add_job(job_self_ping,        "interval", minutes=10,                  args=[application])
+[MessageHandler(filters.Regex("^➕ הוספת ליד$"), add_start)],
         states={
             ASK_NAME:  [MessageHandler(filters.TEXT & ~filters.COMMAND, got_name)],
             ASK_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_phone)],
