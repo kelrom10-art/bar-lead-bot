@@ -932,6 +932,9 @@ async def job_stale_leads(app):
 
 def run_bot_thread():
     """Start Telegram bot polling in its own asyncio event loop."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
     if not BOT_TOKEN or not OWNER_CHAT_ID:
         logger.warning("BOT_TOKEN or OWNER_CHAT_ID not set — bot not started")
         return
