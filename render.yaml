@@ -1,3 +1,8 @@
+databases:
+  - name: bar-lead-bot-db
+    plan: free
+    region: oregon
+
 services:
   - type: web
     name: bar-lead-bot
@@ -9,7 +14,9 @@ services:
       - key: OWNER_CHAT_ID
         sync: false
       - key: DATABASE_URL
-        sync: false
+        fromDatabase:
+          name: bar-lead-bot-db
+          property: connectionString
       - key: APP_PIN
         value: "1234"
     healthCheckPath: /health
