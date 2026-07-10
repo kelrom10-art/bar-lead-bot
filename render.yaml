@@ -1,11 +1,15 @@
 services:
-  - type: worker
+  - type: web
     name: bar-lead-bot
-    runtime: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: python bot.py
+    runtime: docker
+    dockerfilePath: ./Dockerfile
     envVars:
       - key: BOT_TOKEN
         sync: false
       - key: OWNER_CHAT_ID
         sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: APP_PIN
+        value: "1234"
+    healthCheckPath: /health

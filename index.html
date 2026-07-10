@@ -1,0 +1,955 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#09090f">
+<title>ניהול לידים 🍸</title>
+<link rel="manifest" href="/manifest.json">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+:root {
+  --bg: #09090f;
+  --card: #12132a;
+  --card2: #1b1c38;
+  --accent: #e94560;
+  --accent2: #0f2d6a;
+  --green: #00d4a0; --yellow: #ffc048; --red: #ff4d6d;
+  --blue: #4facff; --purple: #b49aff; --amber: #ffa726;
+  --text: #eeeef5; --text2: #6b7591;
+  --border: rgba(255,255,255,0.07); --border2: rgba(255,255,255,0.12);
+  --nav-h: 70px;
+  --glow: rgba(233,69,96,0.28);
+}
+html, body {
+  height: 100%; background: var(--bg); color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  overflow: hidden;
+}
+#app { height: 100%; display: flex; flex-direction: column; }
+.screen { display: none; flex: 1; overflow-y: auto; padding: 0 16px calc(var(--nav-h) + 20px); }
+.screen.active { display: block; }
+
+/* ── PIN Screen ──────────────────────────────────────────────────────── */
+#pin-screen {
+  position: fixed; inset: 0; z-index: 9999;
+  background: radial-gradient(ellipse at 50% -5%, rgba(233,69,96,.18) 0%, var(--bg) 55%);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px;
+}
+#pin-screen.hidden { display: none; }
+.pin-logo {
+  font-size: 72px;
+  filter: drop-shadow(0 0 28px rgba(233,69,96,.55));
+  animation: pinFloat 3.5s ease-in-out infinite;
+}
+@keyframes pinFloat { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-9px); } }
+.pin-title { font-size: 26px; font-weight: 800; letter-spacing: -.5px; }
+.pin-sub { font-size: 14px; color: var(--text2); }
+.pin-dots { display: flex; gap: 18px; }
+.pin-dot {
+  width: 14px; height: 14px; border-radius: 50%;
+  background: rgba(255,255,255,.07); border: 2px solid rgba(255,255,255,.18);
+  transition: all .22s cubic-bezier(.34,1.56,.64,1);
+}
+.pin-dot.filled {
+  background: var(--accent); border-color: var(--accent);
+  transform: scale(1.25); box-shadow: 0 0 14px var(--glow);
+}
+.pin-keypad { display: grid; grid-template-columns: repeat(3, 76px); gap: 14px; }
+.pin-key {
+  height: 76px; border-radius: 50%; border: 1px solid var(--border2);
+  background: var(--card); color: var(--text);
+  font-size: 26px; font-weight: 400; cursor: pointer;
+  transition: all .15s; display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 4px 16px rgba(0,0,0,.45);
+}
+.pin-key:active { transform: scale(.86); background: var(--accent); border-color: var(--accent); box-shadow: 0 0 22px var(--glow); }
+.pin-key.empty { background: transparent; border: none; cursor: default; box-shadow: none; }
+.pin-error { color: var(--red); font-size: 13px; min-height: 18px; font-weight: 500; }
+
+/* ── Header ──────────────────────────────────────────────────────────── */
+.header {
+  background: linear-gradient(160deg, rgba(15,45,106,.95) 0%, rgba(14,10,36,.98) 100%);
+  backdrop-filter: blur(20px);
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(255,255,255,.05);
+  position: sticky; top: 0; z-index: 10;
+  display: flex; align-items: center; gap: 12px;
+}
+.header-logo { font-size: 28px; flex-shrink: 0; }
+.header-text { flex: 1; }
+.header h1 { font-size: 18px; font-weight: 800; letter-spacing: -.3px; }
+.header p { font-size: 11px; color: var(--text2); margin-top: 2px; }
+.header-lock { font-size: 20px; cursor: pointer; flex-shrink: 0; opacity: .45; transition: opacity .2s; }
+.header-lock:active { opacity: 1; }
+
+/* ── Nav ─────────────────────────────────────────────────────────────── */
+.bottom-nav {
+  position: fixed; bottom: 0; left: 0; right: 0; height: var(--nav-h);
+  background: rgba(14,14,30,.97); backdrop-filter: blur(20px);
+  border-top: 1px solid var(--border); display: flex; z-index: 100;
+}
+.nav-btn {
+  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 4px; border: none; background: none; color: var(--text2);
+  cursor: pointer; font-size: 10px; font-weight: 600;
+  transition: all .25s; position: relative;
+}
+.nav-btn .icon { font-size: 22px; transition: transform .25s; }
+.nav-btn.active { color: var(--accent); }
+.nav-btn.active .icon { transform: scale(1.15) translateY(-1px); }
+.nav-btn.active::before {
+  content: ''; position: absolute; top: 0; left: 22%; right: 22%;
+  height: 2.5px; background: var(--accent);
+  border-radius: 0 0 4px 4px; box-shadow: 0 0 10px var(--glow);
+}
+
+/* ── Cards ───────────────────────────────────────────────────────────── */
+.card { background: var(--card); border-radius: 18px; padding: 16px; margin-bottom: 12px; border: 1px solid var(--border); }
+.card-row { display: flex; justify-content: space-between; align-items: center; }
+
+/* ── Lead items ──────────────────────────────────────────────────────── */
+.lead-wrapper { position: relative; margin-bottom: 10px; overflow: hidden; border-radius: 16px; }
+.lead-swipe-bg {
+  position: absolute; inset: 0; border-radius: 16px;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 24px; font-size: 18px; font-weight: 700; pointer-events: none;
+}
+.swipe-won { color: var(--green); }
+.swipe-lost { color: var(--red); }
+.lead-item {
+  background: var(--card); border-radius: 16px;
+  padding: 14px 14px 14px 16px;
+  border: 1px solid var(--border);
+  border-right: 3px solid rgba(255,255,255,.12);
+  cursor: pointer; transition: transform .1s, background .15s;
+  position: relative; z-index: 1; user-select: none; will-change: transform;
+}
+.lead-item:active { background: var(--card2); }
+.lead-item.swiping { transition: none; }
+/* Status color indicators (right side = RTL visual start) */
+.lead-item.s-new        { border-right-color: var(--blue); }
+.lead-item.s-pre_reminded { border-right-color: var(--yellow); }
+.lead-item.s-called     { border-right-color: var(--purple); }
+.lead-item.s-won        { border-right-color: var(--green); }
+.lead-item.s-lost       { border-right-color: var(--red); }
+.lead-item.s-follow_up  { border-right-color: var(--accent); }
+.lead-item.s-old        { border-right-color: var(--text2); }
+.lead-name { font-size: 16px; font-weight: 700; letter-spacing: -.2px; }
+.lead-phone { font-size: 13px; color: var(--text2); margin-top: 4px; }
+.lead-time { font-size: 12px; color: var(--text2); }
+.lead-meta { display: flex; gap: 6px; margin-top: 10px; align-items: center; flex-wrap: wrap; }
+
+/* ── Badges ──────────────────────────────────────────────────────────── */
+.badge { padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 700; letter-spacing: .2px; }
+.badge-new    { background: rgba(79,172,255,.12); color: var(--blue);   border: 1px solid rgba(79,172,255,.22); }
+.badge-pre    { background: rgba(255,192,72,.12);  color: var(--yellow); border: 1px solid rgba(255,192,72,.22); }
+.badge-called { background: rgba(180,154,255,.12); color: var(--purple); border: 1px solid rgba(180,154,255,.22); }
+.badge-won    { background: rgba(0,212,160,.12);   color: var(--green);  border: 1px solid rgba(0,212,160,.22); }
+.badge-lost   { background: rgba(255,77,109,.12);  color: var(--red);    border: 1px solid rgba(255,77,109,.22); }
+.badge-follow { background: rgba(233,69,96,.12);   color: var(--accent); border: 1px solid rgba(233,69,96,.22); }
+.badge-old    { background: rgba(107,117,145,.12); color: var(--text2);  border: 1px solid rgba(107,117,145,.15); }
+
+/* ── Stats ───────────────────────────────────────────────────────────── */
+.stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
+.stat-card { background: var(--card); border-radius: 16px; padding: 16px 14px; border: 1px solid var(--border); text-align: center; }
+.stat-num { font-size: 30px; font-weight: 800; letter-spacing: -1px; }
+.stat-lbl { font-size: 11px; color: var(--text2); margin-top: 4px; font-weight: 500; }
+.stat-won    { color: var(--green); }
+.stat-lost   { color: var(--red); }
+.stat-active { color: var(--blue); }
+.stat-money  { color: var(--yellow); }
+.stat-purple { color: var(--purple); }
+
+/* ── Forms ───────────────────────────────────────────────────────────── */
+.form-group { margin-bottom: 16px; }
+label { display: block; font-size: 13px; color: var(--text2); margin-bottom: 7px; font-weight: 500; }
+input, select, textarea {
+  width: 100%; background: rgba(255,255,255,.04);
+  border: 1px solid var(--border2); border-radius: 12px;
+  padding: 13px 16px; color: var(--text); font-size: 15px;
+  outline: none; transition: border-color .2s, box-shadow .2s; font-family: inherit;
+}
+input:focus, select:focus, textarea:focus {
+  border-color: var(--accent); box-shadow: 0 0 0 3px rgba(233,69,96,.1);
+}
+textarea { resize: none; height: 80px; }
+
+/* ── Buttons ─────────────────────────────────────────────────────────── */
+.btn { width: 100%; padding: 14px; border-radius: 14px; border: none; font-size: 16px; font-weight: 700; cursor: pointer; transition: all .15s; letter-spacing: -.2px; }
+.btn:active { transform: scale(.97); opacity: .85; }
+.btn-primary { background: linear-gradient(135deg, #e94560, #c4243e); color: #fff; box-shadow: 0 4px 16px rgba(233,69,96,.3); }
+.btn-green   { background: linear-gradient(135deg, #00d4a0, #009f78); color: #fff; box-shadow: 0 4px 16px rgba(0,212,160,.25); }
+.btn-yellow  { background: linear-gradient(135deg, #ffc048, #e8a520); color: #000; box-shadow: 0 4px 16px rgba(255,192,72,.25); }
+.btn-red     { background: linear-gradient(135deg, #ff4d6d, #e03050); color: #fff; box-shadow: 0 4px 16px rgba(255,77,109,.25); }
+.btn-gray    { background: var(--card2); color: var(--text); border: 1px solid var(--border2); }
+.btn-sm { padding: 10px 18px; font-size: 13px; width: auto; border-radius: 10px; }
+.btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* ── Modal ───────────────────────────────────────────────────────────── */
+.modal-overlay {
+  display: none; position: fixed; inset: 0;
+  background: rgba(0,0,0,.75); backdrop-filter: blur(8px);
+  z-index: 200; align-items: flex-end;
+}
+.modal-overlay.open { display: flex; }
+.modal {
+  background: var(--card2); border-radius: 28px 28px 0 0;
+  padding: 20px; width: 100%; max-height: 88vh; overflow-y: auto;
+  animation: slideUp .3s cubic-bezier(.32,.72,0,1);
+  border: 1px solid rgba(255,255,255,.07); border-bottom: none;
+}
+@keyframes slideUp { from { transform: translateY(100%) } to { transform: translateY(0) } }
+.modal-handle { width: 40px; height: 4px; background: rgba(255,255,255,.14); border-radius: 2px; margin: 0 auto 18px; }
+.modal-title { font-size: 20px; font-weight: 800; margin-bottom: 16px; text-align: center; letter-spacing: -.4px; }
+
+/* ── Search ──────────────────────────────────────────────────────────── */
+.search-wrap { position: relative; margin-bottom: 14px; }
+.search-wrap input { padding-right: 44px; }
+.search-icon { position: absolute; right: 14px; top: 50%; transform: translateY(-50%); font-size: 18px; }
+
+/* ── Filter tabs ─────────────────────────────────────────────────────── */
+.filter-tabs { display: flex; gap: 6px; margin-bottom: 12px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: none; }
+.filter-tabs::-webkit-scrollbar { display: none; }
+.filter-tab {
+  padding: 7px 16px; border-radius: 20px; border: 1px solid var(--border2);
+  background: rgba(255,255,255,.03); color: var(--text2);
+  font-size: 12px; font-weight: 600; white-space: nowrap; cursor: pointer; transition: all .15s;
+}
+.filter-tab.active { background: var(--accent); color: #fff; border-color: var(--accent); box-shadow: 0 4px 12px rgba(233,69,96,.25); }
+
+/* ── Misc ────────────────────────────────────────────────────────────── */
+.time-badge {
+  background: linear-gradient(135deg, var(--accent), #c42040);
+  color: #fff; padding: 5px 12px; border-radius: 20px;
+  font-size: 13px; font-weight: 800; box-shadow: 0 2px 10px rgba(233,69,96,.3);
+}
+.empty { text-align: center; padding: 50px 20px; color: var(--text2); }
+.empty-icon { font-size: 52px; margin-bottom: 14px; }
+.section-title { font-size: 11px; color: var(--text2); font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px; margin-top: 8px; }
+.loading { text-align: center; padding: 36px; color: var(--text2); }
+#toast {
+  position: fixed; bottom: calc(var(--nav-h) + 16px); left: 50%; transform: translateX(-50%);
+  background: rgba(22,22,46,.95); backdrop-filter: blur(16px);
+  color: #fff; padding: 12px 24px; border-radius: 24px; font-size: 14px; font-weight: 600;
+  z-index: 999; opacity: 0; transition: opacity .3s; pointer-events: none; white-space: nowrap;
+  border: 1px solid rgba(255,255,255,.1); box-shadow: 0 8px 28px rgba(0,0,0,.5);
+}
+#toast.show { opacity: 1; }
+.chart-wrap { position: relative; height: 200px; margin: 10px 0; }
+.chart-wrap-bar { position: relative; height: 160px; margin: 10px 0; }
+.sep { height: 1px; background: var(--border); margin: 16px 0; }
+.swipe-hint { text-align: center; font-size: 11px; color: var(--text2); padding: 4px 0 10px; opacity: .45; }
+
+/* ── Tag chips ───────────────────────────────────────────────────────── */
+.tag-chip { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 600; margin: 2px; }
+.tc-w { background: rgba(255,130,130,.12); color: #ff9090; border: 1px solid rgba(255,130,130,.2); }
+.tc-b { background: rgba(130,200,255,.12); color: #82c8ff; border: 1px solid rgba(130,200,255,.2); }
+.tc-p { background: rgba(255,192,72,.12);  color: var(--yellow); border: 1px solid rgba(255,192,72,.2); }
+.tc-r { background: rgba(100,220,150,.12); color: #64dc96; border: 1px solid rgba(100,220,150,.2); }
+.tc-x { background: rgba(180,154,255,.12); color: var(--purple); border: 1px solid rgba(180,154,255,.2); }
+
+.tag-btn { padding: 7px 14px; border-radius: 20px; border: 1px solid var(--border2); background: rgba(255,255,255,.03); color: var(--text2); font-size: 13px; cursor: pointer; transition: all .15s; white-space: nowrap; }
+.tag-btn.selected { background: rgba(180,154,255,.2); color: var(--purple); border-color: rgba(180,154,255,.45); }
+.tags-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.sort-row { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; }
+.sort-lbl { font-size: 12px; color: var(--text2); flex-shrink: 0; }
+.sort-btn { padding: 6px 14px; border-radius: 16px; border: 1px solid var(--border2); background: rgba(255,255,255,.03); color: var(--text2); font-size: 12px; cursor: pointer; transition: all .15s; }
+.sort-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+</style>
+</head>
+<body>
+
+<div id="pin-screen">
+  <div class="pin-logo">🍸</div>
+  <div class="pin-title">Bar Leads</div>
+  <div class="pin-sub">הכנס קוד PIN להמשך</div>
+  <div class="pin-dots" id="pin-dots">
+    <div class="pin-dot" id="d0"></div><div class="pin-dot" id="d1"></div>
+    <div class="pin-dot" id="d2"></div><div class="pin-dot" id="d3"></div>
+  </div>
+  <div class="pin-error" id="pin-error"></div>
+  <div class="pin-keypad">
+    <button class="pin-key" onclick="pinKey('1')">1</button>
+    <button class="pin-key" onclick="pinKey('2')">2</button>
+    <button class="pin-key" onclick="pinKey('3')">3</button>
+    <button class="pin-key" onclick="pinKey('4')">4</button>
+    <button class="pin-key" onclick="pinKey('5')">5</button>
+    <button class="pin-key" onclick="pinKey('6')">6</button>
+    <button class="pin-key" onclick="pinKey('7')">7</button>
+    <button class="pin-key" onclick="pinKey('8')">8</button>
+    <button class="pin-key" onclick="pinKey('9')">9</button>
+    <div class="pin-key empty"></div>
+    <button class="pin-key" onclick="pinKey('0')">0</button>
+    <button class="pin-key" onclick="pinDel()">&#x232B;</button>
+  </div>
+</div>
+
+<div id="app">
+  <div id="screen-today" class="screen active">
+    <div class="header">
+      <span class="header-logo">🍸</span>
+      <div class="header-text">
+        <h1>ניהול לידים</h1>
+        <p id="today-date"></p>
+      </div>
+      <span class="header-lock" onclick="lockApp()">🔒</span>
+    </div>
+    <div id="today-content" style="padding-top:12px;"><div class="loading">טוען...</div></div>
+  </div>
+
+  <div id="screen-leads" class="screen">
+    <div class="header">
+      <span class="header-logo">📋</span>
+      <div class="header-text"><h1>כל הלידים</h1></div>
+    </div>
+    <div style="padding-top:12px;">
+      <div class="search-wrap">
+        <span class="search-icon">🔍</span>
+        <input type="text" id="search-input" placeholder="חיפוש שם / טלפון..." oninput="onSearch(this.value)">
+      </div>
+      <div class="filter-tabs">
+        <button class="filter-tab active" onclick="setFilter('all',this)">הכל</button>
+        <button class="filter-tab" onclick="setFilter('new,pre_reminded,called,follow_up',this)">פעילים</button>
+        <button class="filter-tab" onclick="setFilter('won',this)">נסגרו ✅</button>
+        <button class="filter-tab" onclick="setFilter('lost',this)">אבדו ❌</button>
+        <button class="filter-tab" onclick="setFilter('old',this)">ישנים 📁</button>
+      </div>
+      <div class="sort-row">
+        <span class="sort-lbl">מיון:</span>
+        <button class="sort-btn active" data-sort="date" onclick="setSort('date')">📅 תאריך</button>
+        <button class="sort-btn" data-sort="name" onclick="setSort('name')">🔤 שם</button>
+      </div>
+      <div class="swipe-hint">&#8592; החלק שמאלה ❌ | ✅ ימינה &#8594;</div>
+      <div id="leads-list"><div class="loading">טוען...</div></div>
+    </div>
+  </div>
+
+  <div id="screen-add" class="screen">
+    <div class="header">
+      <span class="header-logo">&#xFF0B;</span>
+      <div class="header-text"><h1>הוספת ליד</h1></div>
+    </div>
+    <div style="padding-top:16px;">
+      <form id="add-form" onsubmit="submitAdd(event)">
+        <div class="form-group"><label>👤 שם הלקוח</label><input type="text" id="add-name" placeholder="ישראל ישראלי" required></div>
+        <div class="form-group"><label>📱 טלפון</label><input type="tel" id="add-phone" placeholder="0501234567" required></div>
+        <div class="form-group"><label>📅 מועד שיחה</label><input type="datetime-local" id="add-time"></div>
+        <div class="form-group"><label>📝 הערות</label><textarea id="add-notes" placeholder="פרטים נוספים..."></textarea></div>
+        <div class="form-group">
+          <label>🏷️ תגיות (אופציונלי)</label>
+          <div class="tags-row" id="add-tags-row">
+            <button type="button" class="tag-btn" data-tag="חתונה" onclick="toggleAddTag(this)">💒 חתונה</button>
+            <button type="button" class="tag-btn" data-tag="בר/בת מצווה" onclick="toggleAddTag(this)">🎉 ב"מ</button>
+            <button type="button" class="tag-btn" data-tag="מסיבה" onclick="toggleAddTag(this)">🎊 מסיבה</button>
+            <button type="button" class="tag-btn" data-tag="ברית" onclick="toggleAddTag(this)">👶 ברית</button>
+            <button type="button" class="tag-btn" data-tag="אחר" onclick="toggleAddTag(this)">📌 אחר</button>
+          </div>
+        </div>
+        <button type="submit" class="btn btn-primary">🎯 הוסף ליד</button>
+      </form>
+    </div>
+  </div>
+
+  <div id="screen-stats" class="screen">
+    <div class="header">
+      <span class="header-logo">📊</span>
+      <div class="header-text"><h1>סטטיסטיקה</h1></div>
+    </div>
+    <div id="stats-content" style="padding-top:12px;"><div class="loading">טוען...</div></div>
+  </div>
+
+  <nav class="bottom-nav">
+    <button class="nav-btn active" onclick="goTo('today',this)"><span class="icon">📅</span>היום</button>
+    <button class="nav-btn" onclick="goTo('leads',this)"><span class="icon">📋</span>לידים</button>
+    <button class="nav-btn" onclick="goTo('add',this)"><span class="icon">&#xFF0B;</span>הוסף</button>
+    <button class="nav-btn" onclick="goTo('stats',this)"><span class="icon">📊</span>סטטיסטיקה</button>
+  </nav>
+</div>
+
+<div class="modal-overlay" id="lead-modal" onclick="closeModal(event)">
+  <div class="modal"><div class="modal-handle"></div><div id="lead-modal-body"></div></div>
+</div>
+
+<div class="modal-overlay" id="edit-modal" onclick="closeEditModal(event)">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-title">✒️ עריכת ליד</div>
+    <form id="edit-form" onsubmit="submitEdit(event)">
+      <div class="form-group"><label>👤 שם</label><input type="text" id="edit-name"></div>
+      <div class="form-group"><label>📱 טלפון</label><input type="tel" id="edit-phone"></div>
+      <div class="form-group"><label>📅 מועד שיחה</label><input type="datetime-local" id="edit-time"></div>
+      <div class="form-group"><label>📝 הערות</label><textarea id="edit-notes"></textarea></div>
+      <div class="form-group">
+        <label>🏷️ תגיות</label>
+        <div class="tags-row" id="edit-tags-row">
+          <button type="button" class="tag-btn" data-tag="חתונה" onclick="toggleEditTag(this)">💒 חתונה</button>
+          <button type="button" class="tag-btn" data-tag="בר/בת מצווה" onclick="toggleEditTag(this)">🎉 ב"מ</button>
+          <button type="button" class="tag-btn" data-tag="מסיבה" onclick="toggleEditTag(this)">🎊 מסיבה</button>
+          <button type="button" class="tag-btn" data-tag="ברית" onclick="toggleEditTag(this)">👶 ברית</button>
+          <button type="button" class="tag-btn" data-tag="אחר" onclick="toggleEditTag(this)">📌 אחר</button>
+        </div>
+      </div>
+      <div class="btn-row" style="margin-top:8px;">
+        <button type="submit" class="btn btn-primary btn-sm" style="flex:1;">💾 שמור</button>
+        <button type="button" class="btn btn-gray btn-sm" onclick="closeEditModal()">ביטול</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+const API = '';
+let currentFilter = 'all', currentLeadId = null, statsChart = null, dailyChart = null, currentSort = 'date';
+let selectedAddTags = new Set(), selectedEditTags = new Set();
+
+// ── HTML escape ───────────────────────────────────────────────────────
+function esc(s){
+  if(s===null||s===undefined)return'';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── PIN ───────────────────────────────────────────────────────────────
+let pinInput = '';
+async function initPin() {
+  if (sessionStorage.getItem('pin_ok') === '1') {
+    document.getElementById('pin-screen').classList.add('hidden');
+    return true;
+  }
+  try {
+    const cfg = await fetch(API + '/api/app-config').then(r => r.json());
+    if (!cfg.pin_required) {
+      sessionStorage.setItem('pin_ok','1');
+      document.getElementById('pin-screen').classList.add('hidden');
+      return true;
+    }
+  } catch(e) {}
+  return false;
+}
+function pinKey(d) {
+  if (pinInput.length >= 4) return;
+  pinInput += d; updatePinDots();
+  if (pinInput.length === 4) setTimeout(submitPin, 80);
+}
+function pinDel() {
+  pinInput = pinInput.slice(0,-1);
+  document.getElementById('pin-error').textContent = '';
+  updatePinDots();
+}
+function updatePinDots() {
+  for (let i = 0; i < 4; i++)
+    document.getElementById('d'+i).classList.toggle('filled', i < pinInput.length);
+}
+async function submitPin() {
+  try {
+    const res = await fetch(API+'/api/verify-pin', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({pin: pinInput})
+    });
+    if (res.ok) {
+      sessionStorage.setItem('pin_ok','1');
+      document.getElementById('pin-screen').classList.add('hidden');
+      loadToday(); loadLeads();
+    } else {
+      document.getElementById('pin-error').textContent = '❌ קוד שגוי, נסה שנית';
+      pinInput = ''; updatePinDots();
+    }
+  } catch(e) {
+    document.getElementById('pin-error').textContent = '⚠️ שגיאת חיבור';
+    pinInput = ''; updatePinDots();
+  }
+}
+function lockApp() {
+  sessionStorage.removeItem('pin_ok');
+  pinInput = ''; updatePinDots();
+  document.getElementById('pin-error').textContent = '';
+  document.getElementById('pin-screen').classList.remove('hidden');
+}
+
+// ── Tags & Sort ───────────────────────────────────────────────────────
+function toggleAddTag(btn) {
+  const tag = btn.dataset.tag;
+  if (selectedAddTags.has(tag)) { selectedAddTags.delete(tag); btn.classList.remove('selected'); }
+  else { selectedAddTags.add(tag); btn.classList.add('selected'); }
+}
+function toggleEditTag(btn) {
+  const tag = btn.dataset.tag;
+  if (selectedEditTags.has(tag)) { selectedEditTags.delete(tag); btn.classList.remove('selected'); }
+  else { selectedEditTags.add(tag); btn.classList.add('selected'); }
+}
+function setSort(sort) {
+  currentSort = sort;
+  document.querySelectorAll('.sort-btn').forEach(b => b.classList.toggle('active', b.dataset.sort === sort));
+  loadLeads(document.getElementById('search-input').value);
+}
+const TAG_COLORS = {
+  'חתונה':'tc-w', 'בר/בת מצווה':'tc-b', 'מסיבה':'tc-p', 'ברית':'tc-r'
+};
+function renderTags(tags) {
+  return (tags||'').split(',').filter(t=>t.trim()).map(t=>{
+    const cls = TAG_COLORS[t.trim()] || 'tc-x';
+    return `<span class="tag-chip ${cls}">🏷 ${esc(t.trim())}</span>`;
+  }).join('');
+}
+
+// ── Utilities ─────────────────────────────────────────────────────────
+function toast(msg,dur=2500){
+  const el=document.getElementById('toast');
+  el.textContent=msg; el.classList.add('show');
+  setTimeout(()=>el.classList.remove('show'),dur);
+}
+function fmtDT(dt){
+  if(!dt)return'—';
+  try{
+    const d=new Date(dt.replace(' ','T'));
+    return d.toLocaleDateString('he-IL')+' '+d.toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'});
+  }catch{return dt;}
+}
+function fmtTime(dt){
+  if(!dt)return'';
+  try{
+    const d=new Date(dt.replace(' ','T'));
+    return d.toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'});
+  }catch{return'';}
+}
+function toLocalDatetime(s){
+  if(!s)return'';
+  try{
+    const d=new Date(s.replace(' ','T'));
+    const p=n=>String(n).padStart(2,'0');
+    return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+  }catch{return'';}
+}
+function fromLocalDatetime(v){return v?v.replace('T',' ')+':00':null;}
+function badgeClass(s){
+  return({new:'badge-new',pre_reminded:'badge-pre',called:'badge-called',
+          won:'badge-won',lost:'badge-lost',follow_up:'badge-follow',old:'badge-old'})[s]||'badge-new';
+}
+
+// ── Navigation ────────────────────────────────────────────────────────
+function goTo(screen,btn){
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
+  document.getElementById('screen-'+screen).classList.add('active');
+  btn.classList.add('active');
+  if(screen==='today') loadToday();
+  if(screen==='leads') loadLeads();
+  if(screen==='stats') loadStats();
+}
+
+// ── Today screen ──────────────────────────────────────────────────────
+async function loadToday(){
+  const now=new Date();
+  document.getElementById('today-date').textContent=
+    now.toLocaleDateString('he-IL',{weekday:'long',day:'numeric',month:'long'});
+  const [todayLeads,stats]=await Promise.all([
+    fetch(API+'/api/leads/today').then(r=>r.json()).catch(()=>[]),
+    fetch(API+'/api/stats').then(r=>r.json()).catch(()=>({}))
+  ]);
+  const active=todayLeads.filter(l=>['new','pre_reminded','called','follow_up'].includes(l.status));
+  const done=todayLeads.filter(l=>['won','lost'].includes(l.status));
+  const m=stats.monthly||{};
+  let html=`<div class="stat-grid">
+    <div class="stat-card"><div class="stat-num stat-active">${stats.active||0}</div><div class="stat-lbl">פעילים</div></div>
+    <div class="stat-card"><div class="stat-num stat-won">${m.won_count||0}</div><div class="stat-lbl">נסגרו החודש</div></div>
+    <div class="stat-card"><div class="stat-num stat-money">&#x20aa;${(m.won_amount||0).toLocaleString('he-IL',{maximumFractionDigits:0})}</div><div class="stat-lbl">הכנסות החודש</div></div>
+    <div class="stat-card"><div class="stat-num">${stats.total||0}</div><div class="stat-lbl">סה"כ לידים</div></div>
+  </div>`;
+  if(active.length){
+    html+=`<div class="section-title">📞 שיחות להיום (${active.length})</div>`;
+    active.forEach(l=>{
+      html+=`<div class="lead-item s-${l.status}" onclick="openLead('${l.id}')">
+        <div class="card-row">
+          <div class="lead-name">${esc(l.name)}</div>
+          <span class="time-badge">${fmtTime(l.call_time)}</span>
+        </div>
+        <div class="lead-phone">${esc(l.phone)}</div>
+        <div class="lead-meta"><span class="badge ${badgeClass(l.status)}">${l.status_emoji} ${l.status_heb}</span></div>
+      </div>`;
+    });
+  } else {
+    html+=`<div class="card" style="text-align:center;">
+      <div style="font-size:36px;margin-bottom:8px;">✅</div>
+      <div style="color:var(--text2)">אין שיחות מתוכננות להיום</div>
+    </div>`;
+  }
+  if(done.length){
+    html+=`<div class="section-title">✅ טופל היום (${done.length})</div>`;
+    done.forEach(l=>{
+      html+=`<div class="lead-item s-${l.status}" onclick="openLead('${l.id}')">
+        <div class="lead-name">${esc(l.name)}</div>
+        <div class="lead-phone">${esc(l.phone)}</div>
+        <div class="lead-meta"><span class="badge ${badgeClass(l.status)}">${l.status_emoji} ${l.status_heb}</span></div>
+      </div>`;
+    });
+  }
+  document.getElementById('today-content').innerHTML=html;
+}
+
+// ── Leads screen ──────────────────────────────────────────────────────
+let searchTimeout;
+function onSearch(v){clearTimeout(searchTimeout);searchTimeout=setTimeout(()=>loadLeads(v),300);}
+function setFilter(f,btn){
+  currentFilter=f;
+  document.querySelectorAll('.filter-tab').forEach(t=>t.classList.remove('active'));
+  btn.classList.add('active');
+  loadLeads(document.getElementById('search-input').value);
+}
+async function loadLeads(q=''){
+  const list=document.getElementById('leads-list');
+  list.innerHTML='<div class="loading">טוען...</div>';
+  let url=API+'/api/leads';
+  const p=[];
+  if(q) p.push('q='+encodeURIComponent(q));
+  else if(currentFilter!=='all') p.push('status='+currentFilter);
+  if(p.length) url+='?'+p.join('&');
+  let leads=await fetch(url).then(r=>r.json()).catch(()=>[]);
+  if(!leads.length){
+    list.innerHTML='<div class="empty"><div class="empty-icon">🔍</div><div>לא נמצאו לידים</div></div>';
+    return;
+  }
+  if(currentSort==='name') leads.sort((a,b)=>(a.name||'').localeCompare(b.name||'','he'));
+  else leads.sort((a,b)=>(a.call_time||'').localeCompare(b.call_time||''));
+  list.innerHTML=leads.map(l=>`
+    <div class="lead-wrapper" id="wrap-${l.id}">
+      <div class="lead-swipe-bg">
+        <span class="swipe-won">✅ נסגר</span>
+        <span class="swipe-lost">❌ אבד</span>
+      </div>
+      <div class="lead-item s-${l.status}" id="item-${l.id}" onclick="openLead('${l.id}')">
+        <div class="card-row">
+          <div class="lead-name">${esc(l.name)}</div>
+          <div style="font-size:12px;color:var(--text2)">${fmtTime(l.call_time)}</div>
+        </div>
+        <div class="lead-phone">${esc(l.phone)}</div>
+        <div class="lead-meta">
+          <span class="badge ${badgeClass(l.status)}">${l.status_emoji} ${l.status_heb}</span>
+          ${l.call_time?`<span class="lead-time">📅 ${fmtDT(l.call_time)}</span>`:''}
+          ${renderTags(l.tags)}
+        </div>
+      </div>
+    </div>`).join('');
+  leads.forEach(l=>addSwipe(l.id));
+}
+
+// ── Swipe gestures ────────────────────────────────────────────────────
+function addSwipe(id){
+  const el=document.getElementById('item-'+id);
+  const wrap=document.getElementById('wrap-'+id);
+  if(!el||!wrap)return;
+  let startX=0,startY=0,dx=0,dragging=false,cancelled=false;
+  const THRESHOLD=80;
+  function onStart(e){
+    const t=e.touches?e.touches[0]:e;
+    startX=t.clientX;startY=t.clientY;dx=0;dragging=true;cancelled=false;
+    el.classList.add('swiping');
+  }
+  function onMove(e){
+    if(!dragging||cancelled)return;
+    const t=e.touches?e.touches[0]:e;
+    dx=t.clientX-startX;
+    const dy=Math.abs(t.clientY-startY);
+    if(dy>Math.abs(dx)&&Math.abs(dx)<20){cancelled=true;el.style.transform='';return;}
+    e.preventDefault();
+    const c=Math.max(-140,Math.min(140,dx));
+    el.style.transform=`translateX(${c}px)`;
+    if(dx>30) wrap.style.background=`rgba(0,212,160,${Math.min(.4,dx/200)})`;
+    else if(dx<-30) wrap.style.background=`rgba(255,77,109,${Math.min(.4,-dx/200)})`;
+    else wrap.style.background='';
+  }
+  function onEnd(){
+    if(!dragging)return;
+    dragging=false;el.classList.remove('swiping');
+    el.style.transition='transform .25s ease';wrap.style.background='';
+    if(!cancelled&&dx>THRESHOLD){
+      el.style.transform='translateX(110%)';
+      setTimeout(()=>setStatusSwipe(id,'won'),220);
+    } else if(!cancelled&&dx<-THRESHOLD){
+      el.style.transform='translateX(-110%)';
+      setTimeout(()=>setStatusSwipe(id,'lost'),220);
+    } else {
+      el.style.transform='';
+    }
+    setTimeout(()=>{el.style.transition='';},300);
+  }
+  el.addEventListener('touchstart',onStart,{passive:true});
+  el.addEventListener('touchmove',onMove,{passive:false});
+  el.addEventListener('touchend',onEnd);
+}
+async function setStatusSwipe(id,status){
+  await fetch(API+'/api/leads/'+id,{
+    method:'PUT',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({status})
+  });
+  toast(status==='won'?'✅ נסגר!':'❌ אבד');
+  loadLeads(document.getElementById('search-input').value);
+}
+
+// ── Lead detail modal ─────────────────────────────────────────────────
+async function openLead(id){
+  currentLeadId=id;
+  const l=await fetch(API+'/api/leads/'+id).then(r=>r.json());
+  let amountHtml='';
+  if(l.status==='won'&&l.sale_amount)
+    amountHtml=`<div class="card" style="background:rgba(0,212,160,.08);border-color:var(--green);">
+      <div style="color:var(--green);font-size:20px;font-weight:800;">💰 &#x20aa;${Number(l.sale_amount).toLocaleString()}</div>
+      <div style="font-size:12px;color:var(--text2);">סכום עסקה</div>
+    </div>`;
+  const followUpHtml=l.follow_up_time?
+    `<div style="color:var(--yellow);font-size:13px;margin-top:4px;">🔄 חזרה: ${fmtDT(l.follow_up_time)}</div>`:'';
+  const tagsHtml = renderTags(l.tags);
+  document.getElementById('lead-modal-body').innerHTML=`
+    <div class="modal-title">${esc(l.name)}</div>
+    <div class="card">
+      <div class="card-row" style="margin-bottom:8px;">
+        <span class="badge ${badgeClass(l.status)}" style="font-size:13px;">${l.status_emoji} ${l.status_heb}</span>
+        <a href="tel:${esc(l.phone)}" class="btn btn-green btn-sm" style="text-decoration:none;display:inline-flex;align-items:center;gap:4px;">📞 התקשר</a>
+      </div>
+      <div style="color:var(--text2);font-size:14px;margin-top:4px;">📱 ${esc(l.phone)}</div>
+      ${l.call_time?`<div style="color:var(--text2);font-size:13px;margin-top:4px;">📅 שיחה: ${fmtDT(l.call_time)}</div>`:''}
+      ${followUpHtml}
+      ${tagsHtml?`<div style="margin-top:8px;">${tagsHtml}</div>`:''}
+      ${l.notes?`<div style="margin-top:8px;font-size:13px;">📝 ${esc(l.notes)}</div>`:''}
+    </div>
+    ${amountHtml}
+    <div class="section-title">עדכון סטאטוס</div>
+    <div id="status-btns">
+      <div class="btn-row" style="margin-bottom:10px;">
+        <button class="btn btn-green btn-sm" onclick="promptWon('${id}')" style="flex:1;">✅ נסגר</button>
+        <button class="btn btn-red btn-sm" onclick="setStatus('${id}','lost')" style="flex:1;">❌ אבד</button>
+      </div>
+      <div class="btn-row" style="margin-bottom:10px;">
+        <button class="btn btn-yellow btn-sm" onclick="setStatus('${id}','follow_up')" style="flex:1;">🔄 המשך טיפול</button>
+        <button class="btn btn-gray btn-sm" onclick="setStatus('${id}','old')" style="flex:1;">📁 ישן</button>
+      </div>
+    </div>
+    <div id="won-prompt-area"></div>
+    <div class="sep"></div>
+    <div class="btn-row">
+      <button class="btn btn-gray btn-sm" onclick="openEdit('${id}')" style="flex:1;">✏️ עריכה</button>
+      <button class="btn btn-red btn-sm" onclick="deleteLead('${id}')" style="flex:1;">🗑 מחק</button>
+    </div>
+    ${l.status==='won'&&!l.sale_amount?`
+    <div class="sep"></div>
+    <div class="section-title">סכום עסקה</div>
+    <div class="form-group">
+      <input type="number" id="won-amount" placeholder="סכום בשקלים" style="margin-bottom:8px;">
+      <button class="btn btn-green" onclick="saveAmount('${id}')">💰 שמור סכום</button>
+    </div>`:''}
+  `;
+  document.getElementById('lead-modal').classList.add('open');
+}
+function promptWon(id){
+  document.getElementById('status-btns').style.display='none';
+  document.getElementById('won-prompt-area').innerHTML=`
+    <div class="card" style="background:rgba(0,212,160,.07);border-color:var(--green);margin-bottom:10px;">
+      <div style="font-weight:700;margin-bottom:10px;">🎉 כמה שילם הלקוח?</div>
+      <input type="number" id="inline-won-amt" placeholder="סכום בשקלים (אפשר לדלג)"
+        style="width:100%;background:var(--card2);border:1px solid var(--border2);border-radius:10px;padding:12px;color:var(--text);font-size:15px;margin-bottom:10px;outline:none;">
+      <div class="btn-row">
+        <button class="btn btn-green btn-sm" style="flex:1;" onclick="finalizeWon('${id}')">💰 סגור עסקה</button>
+        <button class="btn btn-gray btn-sm" onclick="openLead('${id}')">ביטול</button>
+      </div>
+    </div>`;
+  setTimeout(()=>document.getElementById('inline-won-amt')?.focus(),100);
+}
+async function finalizeWon(id){
+  const amtEl=document.getElementById('inline-won-amt');
+  const body={status:'won'};
+  if(amtEl&&amtEl.value) body.sale_amount=parseFloat(amtEl.value);
+  await fetch(API+'/api/leads/'+id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  toast('🎉 עסקה נסגרה!');
+  document.getElementById('lead-modal').classList.remove('open');
+  loadToday(); loadLeads();
+}
+function closeModal(e){
+  if(e&&e.target!==document.getElementById('lead-modal'))return;
+  document.getElementById('lead-modal').classList.remove('open');
+  currentLeadId=null; loadToday(); loadLeads();
+}
+async function setStatus(id,status){
+  let body={status};
+  if(status==='won'){
+    const amt=document.getElementById('won-amount');
+    if(amt&&amt.value) body.sale_amount=parseFloat(amt.value);
+  }
+  await fetch(API+'/api/leads/'+id,{
+    method:'PUT',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(body)
+  });
+  toast('✅ סטאטוס עודכן!');
+  document.getElementById('lead-modal').classList.remove('open');
+  loadToday(); loadLeads();
+}
+async function saveAmount(id){
+  const amt=document.getElementById('won-amount').value;
+  if(!amt){toast('הכנס סכום');return;}
+  await fetch(API+'/api/leads/'+id,{
+    method:'PUT',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({sale_amount:parseFloat(amt)})
+  });
+  toast('💰 סכום נשמר!'); openLead(id);
+}
+async function deleteLead(id){
+  if(!confirm('למחוק את הליד?'))return;
+  await fetch(API+'/api/leads/'+id,{method:'DELETE'});
+  document.getElementById('lead-modal').classList.remove('open');
+  toast('🗑 ליד נמחק'); loadToday(); loadLeads();
+}
+
+// ── Edit modal ────────────────────────────────────────────────────────
+async function openEdit(id){
+  const l=await fetch(API+'/api/leads/'+id).then(r=>r.json());
+  document.getElementById('edit-name').value=l.name||'';
+  document.getElementById('edit-phone').value=l.phone||'';
+  document.getElementById('edit-time').value=toLocalDatetime(l.call_time);
+  document.getElementById('edit-notes').value=l.notes||'';
+  selectedEditTags=new Set((l.tags||'').split(',').filter(t=>t.trim()));
+  document.querySelectorAll('#edit-tags-row .tag-btn').forEach(b=>{
+    b.classList.toggle('selected', selectedEditTags.has(b.dataset.tag));
+  });
+  document.getElementById('lead-modal').classList.remove('open');
+  document.getElementById('edit-modal').classList.add('open');
+}
+function closeEditModal(e){
+  if(e&&e.target!==document.getElementById('edit-modal'))return;
+  document.getElementById('edit-modal').classList.remove('open');
+}
+async function submitEdit(e){
+  e.preventDefault(); if(!currentLeadId)return;
+  const name=document.getElementById('edit-name').value.trim();
+  const phone=document.getElementById('edit-phone').value.trim();
+  if(!name||!phone){toast('שם וטלפון הם שדות חובה');return;}
+  const body={
+    name,phone,
+    call_time:fromLocalDatetime(document.getElementById('edit-time').value),
+    notes:document.getElementById('edit-notes').value.trim(),
+    tags:[...selectedEditTags].join(',')
+  };
+  const res=await fetch(API+'/api/leads/'+currentLeadId,{
+    method:'PUT',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(body)
+  });
+  document.getElementById('edit-modal').classList.remove('open');
+  if(res.ok) toast('✅ ליד עודכן!'); else toast('❌ שגיאה בעדכון');
+  loadToday(); loadLeads();
+}
+
+// ── Add lead ──────────────────────────────────────────────────────────
+async function submitAdd(e){
+  e.preventDefault();
+  const body={
+    name:document.getElementById('add-name').value.trim(),
+    phone:document.getElementById('add-phone').value.trim(),
+    call_time:fromLocalDatetime(document.getElementById('add-time').value),
+    notes:document.getElementById('add-notes').value.trim(),
+    tags:[...selectedAddTags].join(',')
+  };
+  if(!body.name||!body.phone){toast('מלא שם וטלפון');return;}
+  const res=await fetch(API+'/api/leads',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(body)
+  });
+  if(res.ok){
+    e.target.reset();
+    selectedAddTags.clear();
+    document.querySelectorAll('#add-tags-row .tag-btn').forEach(b=>b.classList.remove('selected'));
+    toast('🎯 ליד נוסף!');
+    goTo('today',document.querySelector('.nav-btn'));
+  } else {
+    toast('❌ שגיאה בהוספה');
+  }
+}
+
+// ── Stats screen ──────────────────────────────────────────────────────
+async function loadStats(){
+  const stats=await fetch(API+'/api/stats').then(r=>r.json()).catch(()=>({}));
+  const m=stats.monthly||{},w=stats.weekly||{},sc=stats.status_counts||{},daily=stats.daily||[];
+  const rate=v=>v.total?Math.round(v.won_count/v.total*100)+'%':'--';
+  const html=`
+    <div class="section-title">🏆 מדדי ביצוע</div>
+    <div class="stat-grid">
+      <div class="stat-card"><div class="stat-num stat-won">${rate(m)}</div><div class="stat-lbl">המרה חודשית</div></div>
+      <div class="stat-card"><div class="stat-num stat-purple">${stats.avg_days_to_close||'--'}</div><div class="stat-lbl">ימים לסגירה ממוצע</div></div>
+      <div class="stat-card"><div class="stat-num stat-money">${stats.avg_sale?'&#x20aa;'+Number(stats.avg_sale).toLocaleString('he-IL',{maximumFractionDigits:0}):'--'}</div><div class="stat-lbl">עסקה ממוצעת</div></div>
+      <div class="stat-card"><div class="stat-num stat-active">${stats.active||0}</div><div class="stat-lbl">לידים פעילים</div></div>
+    </div>
+    <div class="section-title">📆 החודש הנוכחי</div>
+    <div class="stat-grid">
+      <div class="stat-card"><div class="stat-num stat-active">${m.total||0}</div><div class="stat-lbl">לידים</div></div>
+      <div class="stat-card"><div class="stat-num stat-won">${m.won_count||0}</div><div class="stat-lbl">נסגרו</div></div>
+      <div class="stat-card"><div class="stat-num stat-money">&#x20aa;${(m.won_amount||0).toLocaleString('he-IL',{maximumFractionDigits:0})}</div><div class="stat-lbl">הכנסות</div></div>
+      <div class="stat-card"><div class="stat-num stat-lost">${m.lost||0}</div><div class="stat-lbl">אבדו</div></div>
+    </div>
+    <div class="section-title">📅 7 ימים אחרונים</div>
+    <div class="stat-grid">
+      <div class="stat-card"><div class="stat-num stat-active">${w.total||0}</div><div class="stat-lbl">לידים</div></div>
+      <div class="stat-card"><div class="stat-num stat-won">${w.won_count||0}</div><div class="stat-lbl">נסגרו</div></div>
+      <div class="stat-card"><div class="stat-num stat-money">&#x20aa;${(w.won_amount||0).toLocaleString('he-IL',{maximumFractionDigits:0})}</div><div class="stat-lbl">הכנסות</div></div>
+      <div class="stat-card"><div class="stat-num">${rate(w)}</div><div class="stat-lbl">המרה</div></div>
+    </div>
+    <div class="card">
+      <div class="section-title" style="margin-top:0;">📈 לידים ב-7 ימים אחרונים</div>
+      <div class="chart-wrap-bar"><canvas id="dailyChart"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="section-title" style="margin-top:0;">🥧 פילוח סטאטוסים</div>
+      <div class="chart-wrap"><canvas id="statusChart"></canvas></div>
+    </div>
+    <button class="btn btn-gray" style="margin-top:6px;" onclick="exportExcel()">📤 יצוא Excel</button>
+  `;
+  document.getElementById('stats-content').innerHTML=html;
+  if(dailyChart) dailyChart.destroy();
+  dailyChart=new Chart(document.getElementById('dailyChart').getContext('2d'),{
+    type:'bar',
+    data:{
+      labels:daily.map(d=>d.label),
+      datasets:[{data:daily.map(d=>d.count),backgroundColor:'#e9456099',borderRadius:8,borderSkipped:false}]
+    },
+    options:{
+      plugins:{legend:{display:false}},
+      scales:{
+        x:{grid:{color:'rgba(255,255,255,.04)'},ticks:{color:'#6b7591',font:{size:11}}},
+        y:{grid:{color:'rgba(255,255,255,.04)'},ticks:{color:'#6b7591',stepSize:1,font:{size:11}},beginAtZero:true}
+      },
+      responsive:true,maintainAspectRatio:false
+    }
+  });
+  if(statsChart) statsChart.destroy();
+  const labels=['חדש','תזכורת','עובד','נסגר','אבד','המשך','ישן'];
+  const keys=['new','pre_reminded','called','won','lost','follow_up','old'];
+  const colors=['#4facff','#ffc048','#b49aff','#00d4a0','#ff4d6d','#e94560','#6b7591'];
+  statsChart=new Chart(document.getElementById('statusChart').getContext('2d'),{
+    type:'doughnut',
+    data:{labels,datasets:[{data:keys.map(k=>sc[k]||0),backgroundColor:colors,borderWidth:0}]},
+    options:{
+      plugins:{legend:{position:'bottom',labels:{color:'#6b7591',font:{size:11},boxWidth:12,padding:8}}},
+      cutout:'65%',responsive:true,maintainAspectRatio:false
+    }
+  });
+}
+
+async function exportExcel(){
+  toast('⏳ מכין קובץ...');
+  window.location.href=API+'/api/export';
+}
+
+// ── Service Worker ────────────────────────────────────────────────────
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(()=>{});
+  });
+}
+
+// ── Init ──────────────────────────────────────────────────────────────
+initPin().then(ok => {
+  if (ok) { loadToday(); loadLeads(); }
+});
+</script>
+</body>
+</html>
