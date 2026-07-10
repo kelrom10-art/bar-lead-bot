@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
 """
 Bar Lead Manager — Unified Render Deployment
-FastAPI (REST + PWA) + Telegram Bot + APScheduler
-PostgreSQL via psycopg2 (Supabase)
+FastAPI (REST + PWA) + Telegram Bot + APScheduler + Multi-User Auth
+PostgreSQL via psycopg2
 
 Environment variables required:
-  DATABASE_URL   — PostgreSQL connection string from Supabase
+  DATABASE_URL   — PostgreSQL connection string
   BOT_TOKEN      — Telegram bot token
   OWNER_CHAT_ID  — Telegram chat ID of the owner
-  APP_PIN        — 4-digit PIN for the web app (default: 1234)
   PORT           — Port to listen on (Render sets this automatically)
 """
 
-import asyncio, io, json, logging, os, threading, uuid
+import asyncio, hashlib, hmac as _hmac, io, json, logging, os, secrets, threading, uuid
 from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timedelta
 from typing import Optional
@@ -23,9 +22,10 @@ import psycopg2
 import psycopg2.extras
 import psycopg2.pool
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field, field_validator
 import uvicorn
 import openpyxl
@@ -44,7 +44,6 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 # ── Config ───────────────────────────────────────────────────────────────────
 BOT_TOKEN     = os.getenv("BOT_TOKEN", "")
 OWNER_CHAT_ID = int(os.getenv("OWNER_CHAT_ID", "0"))
-APP_PIN       = os.getenv("APP_PIN", "1234")
 DATABASE_URL  = os.getenv("DATABASE_URL", "")
 PORT          = int(os.getenv("PORT", "8080"))
 TZ            = ZoneInfo("Asia/Jerusalem")
@@ -102,6 +101,7 @@ def _now() -> str:
 def ensure_db():
     with _db() as conn:
         cur = conn.cursor()
+        # Leads table
         cur.execute("""
             CREATE TABLE IF NOT EXISTS leads (
                 id             TEXT PRIMARY KEY,
@@ -114,15 +114,122 @@ def ensure_db():
                 created_at     TEXT,
                 updated_at     TEXT,
                 follow_up_time TEXT,
-                tags           TEXT DEFAULT ''
+                tags           TEXT DEFAULT '',
+                created_by     TEXT DEFAULT ''
             )
         """)
-        cur.execute(
-            "ALTER TABLE leads ADD COLUMN IF NOT EXISTS tags TEXT DEFAULT ''"
-        )
+        cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS tags TEXT DEFAULT ''")
+        cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS created_by TEXT DEFAULT ''")
+        # Users table
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id            TEXT PRIMARY KEY,
+                username      TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                display_name  TEXT DEFAULT '',
+                created_at    TEXT
+            )
+        """)
+        # Sessions table
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                token      TEXT PRIMARY KEY,
+                user_id    TEXT NOT NULL,
+                created_at TEXT,
+                expires_at TEXT
+            )
+        """)
     logger.info("DB ✓")
 
-# ── Shared DB operations (used by both API and bot) ───────────────────────────
+# ── Auth helpers ──────────────────────────────────────────────────────────────
+
+def hash_password(password: str) -> str:
+    """PBKDF2-HMAC-SHA256 with random salt."""
+    salt = secrets.token_hex(16)
+    key = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 100_000)
+    return f"{salt}:{key.hex()}"
+
+def verify_password(password: str, stored: str) -> bool:
+    try:
+        salt, key_hex = stored.split(":", 1)
+        key = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 100_000)
+        return _hmac.compare_digest(key.hex(), key_hex)
+    except Exception:
+        return False
+
+# ── User & Session DB ─────────────────────────────────────────────────────────
+
+def db_count_users() -> int:
+    with _db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM users")
+        return cur.fetchone()[0]
+
+def db_get_user_by_username(username: str) -> Optional[dict]:
+    with _db() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT * FROM users WHERE username=%s", (username.lower().strip(),))
+        row = cur.fetchone()
+    return dict(row) if row else None
+
+def db_create_user(username: str, password: str, display_name: str = "") -> str:
+    uid = str(uuid.uuid4())[:8].upper()
+    with _db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO users (id, username, password_hash, display_name, created_at) VALUES (%s,%s,%s,%s,%s)",
+            (uid, username.lower().strip(), hash_password(password), display_name or username, _now())
+        )
+    return uid
+
+def db_create_session(user_id: str) -> str:
+    token = secrets.token_urlsafe(32)
+    expires = (datetime.now(TZ) + timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%S")
+    with _db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (%s,%s,%s,%s)",
+            (token, user_id, _now(), expires)
+        )
+    return token
+
+def db_get_user_by_token(token: str) -> Optional[dict]:
+    now = _now()
+    with _db() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("""
+            SELECT u.id, u.username, u.display_name, u.created_at
+            FROM users u
+            JOIN sessions s ON s.user_id = u.id
+            WHERE s.token = %s AND s.expires_at > %s
+        """, (token, now))
+        row = cur.fetchone()
+    return dict(row) if row else None
+
+def db_delete_session(token: str):
+    with _db() as conn:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM sessions WHERE token=%s", (token,))
+
+def db_list_users() -> list:
+    with _db() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT id, username, display_name, created_at FROM users ORDER BY created_at")
+        return [dict(r) for r in cur.fetchall()]
+
+# ── FastAPI Auth Dependency ───────────────────────────────────────────────────
+
+_bearer = HTTPBearer(auto_error=False)
+
+def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer)) -> dict:
+    if not credentials:
+        raise HTTPException(401, "נדרשת התחברות")
+    user = db_get_user_by_token(credentials.credentials)
+    if not user:
+        raise HTTPException(401, "הסשן פג תוקף — התחבר מחדש")
+    return user
+
+# ── Shared DB operations ──────────────────────────────────────────────────────
 
 def db_get_lead(lid: str) -> Optional[dict]:
     with _db() as conn:
@@ -151,8 +258,8 @@ def db_get_today() -> list:
     with _db() as conn:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute(
-            "SELECT * FROM leads WHERE call_time LIKE %s AND status IN (%s,%s,%s,%s) ORDER BY call_time",
-            (f"{today}%", ST_NEW, ST_PRE_REMINDED, ST_CALLED, ST_FOLLOW_UP)
+            "SELECT * FROM leads WHERE call_time LIKE %s ORDER BY call_time",
+            (f"{today}%",)
         )
         return [dict(r) for r in cur.fetchall()]
 
@@ -186,15 +293,15 @@ def db_add_lead(name: str, phone: str, call_dt) -> str:
     return lid
 
 def db_add_lead_full(name: str, phone: str, call_time: Optional[str],
-                     notes: str, tags: str) -> str:
+                     notes: str, tags: str, created_by: str = "") -> str:
     lid = str(uuid.uuid4())[:8].upper()
     now = _now()
     with _db() as conn:
         cur = conn.cursor()
         cur.execute(
-            "INSERT INTO leads (id, name, phone, call_time, status, notes, tags, created_at, updated_at) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-            (lid, name, phone, call_time, ST_NEW, notes or "", tags or "", now, now)
+            "INSERT INTO leads (id, name, phone, call_time, status, notes, tags, created_by, created_at, updated_at) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (lid, name, phone, call_time, ST_NEW, notes or "", tags or "", created_by, now, now)
         )
     return lid
 
@@ -305,7 +412,6 @@ def db_stats_since(since: str) -> dict:
 #  TELEGRAM BOT
 # ─────────────────────────────────────────────────────────────────────────────
 
-# ConversationHandler states
 ASK_NAME, ASK_PHONE, ASK_TIME = range(3)
 
 MENU_BUTTONS = {
@@ -323,8 +429,6 @@ MAIN_MENU = ReplyKeyboardMarkup(
     resize_keyboard=True,
     is_persistent=True,
 )
-
-# ── Parse time string ─────────────────────────────────────────────────────────
 
 def parse_time(text: str):
     now = datetime.now(TZ)
@@ -375,8 +479,6 @@ def validate_phone(phone: str) -> bool:
         digits = "0" + digits[3:]
     return len(digits) == 10 and digits.startswith("05")
 
-# ── Inline keyboards ──────────────────────────────────────────────────────────
-
 def outcome_kb(lid: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ נסגר! 🎉",        callback_data=f"out_{lid}_won")],
@@ -400,8 +502,6 @@ def edit_field_kb(lid: str) -> InlineKeyboardMarkup:
         [InlineKeyboardButton("🗑 מחיקת ליד",        callback_data=f"edf_{lid}_delete")],
     ])
 
-# ── Bot Excel export ──────────────────────────────────────────────────────────
-
 def build_excel() -> io.BytesIO:
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -409,8 +509,8 @@ def build_excel() -> io.BytesIO:
     hf = Font(bold=True, color="FFFFFF")
     hb = PatternFill("solid", fgColor="2B579A")
     ca = Alignment(horizontal="center")
-    col_labels = ["מזהה", "שם", "טלפון", "שעת שיחה", "סטטוס", "סכום מכירה", "הערות", "נוצר"]
-    col_keys   = ["id",   "name", "phone", "call_time", "status", "sale_amount", "notes", "created_at"]
+    col_labels = ["מזהה", "שם", "טלפון", "שעת שיחה", "סטטוס", "סכום מכירה", "הערות", "נוצר ע״י", "נוצר"]
+    col_keys   = ["id",   "name", "phone", "call_time", "status", "sale_amount", "notes", "created_by", "created_at"]
     for ci, label in enumerate(col_labels, 1):
         cell = ws.cell(row=1, column=ci, value=label)
         cell.font = hf; cell.fill = hb; cell.alignment = ca
@@ -436,8 +536,6 @@ def build_excel() -> io.BytesIO:
     buf = io.BytesIO()
     wb.save(buf); buf.seek(0)
     return buf
-
-# ── ConversationHandler — add lead ───────────────────────────────────────────
 
 async def add_start(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data.clear()
@@ -505,22 +603,19 @@ async def cancel_add(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await u.message.reply_text("❌ הוספת ליד בוטלה.", reply_markup=MAIN_MENU)
     return ConversationHandler.END
 
-# ── /start ────────────────────────────────────────────────────────────────────
-
 async def cmd_start(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await u.message.reply_text(
         "👋 *שלום! בוט ניהול הלידים שלך* 🍸\n\nבחר פעולה:",
         parse_mode="Markdown", reply_markup=MAIN_MENU)
 
-# ── Menu handlers ─────────────────────────────────────────────────────────────
-
 async def show_today(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
     leads = db_get_today()
-    if not leads:
+    active = [l for l in leads if l.get("status") in (ST_NEW, ST_PRE_REMINDED, ST_CALLED, ST_FOLLOW_UP)]
+    if not active:
         await u.message.reply_text("📅 אין שיחות מתוכננות להיום! 🎉", reply_markup=MAIN_MENU)
         return
-    lines = [f"📅 *שיחות להיום — {datetime.now(TZ).strftime('%d/%m/%Y')} ({len(leads)}):*\n"]
-    for ld in leads:
+    lines = [f"📅 *שיחות להיום — {datetime.now(TZ).strftime('%d/%m/%Y')} ({len(active)}):*\n"]
+    for ld in active:
         ct = str(ld.get("call_time", ""))
         t  = ""
         try:
@@ -624,8 +719,6 @@ async def start_edit(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "✏️ *בחר ליד לעריכה:*",
         reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
 
-# ── Main text router ──────────────────────────────────────────────────────────
-
 async def handle_text(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
     text  = u.message.text.strip()
     state = ctx.user_data.get("state")
@@ -722,7 +815,6 @@ async def handle_text(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown", reply_markup=MAIN_MENU)
         return
 
-    # Main menu routing
     ctx.user_data.clear()
     if "לידים ישנים" in text:
         await show_old_leads(u, ctx)
@@ -740,8 +832,6 @@ async def handle_text(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await start_edit(u, ctx)
     else:
         await u.message.reply_text("💬 לחץ על אחת האפשרויות בתפריט 👇", reply_markup=MAIN_MENU)
-
-# ── Callback handler ──────────────────────────────────────────────────────────
 
 async def callback_handler(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = u.callback_query
@@ -928,10 +1018,7 @@ async def job_stale_leads(app):
         text="\n".join(lines) + "\n\nפתח את האפליקציה לעדכון סטטוס 👆",
         parse_mode="Markdown")
 
-# ── Build and run bot (runs in a separate thread) ─────────────────────────────
-
 def run_bot_thread():
-    """Start Telegram bot polling in its own asyncio event loop."""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
@@ -988,13 +1075,11 @@ def run_bot_thread():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
     ensure_db()
     t = threading.Thread(target=run_bot_thread, daemon=True, name="telegram-bot")
     t.start()
     logger.info("🍸 Bar Lead Manager started")
     yield
-    # Shutdown — daemon thread dies with process, nothing to clean up
 
 fastapi_app = FastAPI(title="Bar Lead Manager API", lifespan=lifespan)
 fastapi_app.add_middleware(
@@ -1028,22 +1113,70 @@ class LeadUpdate(BaseModel):
     follow_up_time: Optional[str]   = None
     tags:           Optional[str]   = None
 
-class PinBody(BaseModel):
-    pin: str
+class RegisterRequest(BaseModel):
+    username:     str = Field(..., min_length=3, max_length=50)
+    password:     str = Field(..., min_length=6)
+    display_name: Optional[str] = ""
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
 
 def enrich(d: dict) -> dict:
     d["status_heb"]   = STATUS_HEB.get(d.get("status", ""), d.get("status", ""))
     d["status_emoji"] = STATUS_EMOJI.get(d.get("status", ""), "")
     return d
 
-# ── API Routes ────────────────────────────────────────────────────────────────
+# ── Auth Routes ───────────────────────────────────────────────────────────────
+
+@fastapi_app.get("/api/app-config")
+def app_config():
+    has_users = db_count_users() > 0
+    return {"auth_type": "login", "has_users": has_users, "version": "3.0"}
+
+@fastapi_app.post("/api/auth/register", status_code=201)
+def register(body: RegisterRequest):
+    if db_get_user_by_username(body.username):
+        raise HTTPException(400, "שם המשתמש כבר קיים")
+    uid   = db_create_user(body.username.strip(), body.password, body.display_name or body.username)
+    token = db_create_session(uid)
+    user  = db_get_user_by_token(token)
+    return {"token": token, "user": user}
+
+@fastapi_app.post("/api/auth/login")
+def login(body: LoginRequest):
+    user = db_get_user_by_username(body.username.strip())
+    if not user or not verify_password(body.password, user["password_hash"]):
+        raise HTTPException(401, "שם משתמש או סיסמה שגויים")
+    token = db_create_session(user["id"])
+    return {
+        "token": token,
+        "user": {"id": user["id"], "username": user["username"], "display_name": user["display_name"]}
+    }
+
+@fastapi_app.post("/api/auth/logout")
+def logout(credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer)):
+    if credentials:
+        db_delete_session(credentials.credentials)
+    return {"ok": True}
+
+@fastapi_app.get("/api/auth/me")
+def get_me(user: dict = Depends(get_current_user)):
+    return user
+
+@fastapi_app.get("/api/auth/users")
+def list_users_api(user: dict = Depends(get_current_user)):
+    return db_list_users()
+
+# ── Protected API Routes ──────────────────────────────────────────────────────
 
 @fastapi_app.get("/health")
 def health():
     return {"status": "ok"}
 
 @fastapi_app.get("/api/leads")
-def get_leads(status: Optional[str] = None, q: Optional[str] = None):
+def get_leads(status: Optional[str] = None, q: Optional[str] = None,
+              user: dict = Depends(get_current_user)):
     if q:
         rows = db_search(q)
     elif status:
@@ -1064,21 +1197,21 @@ def get_leads(status: Optional[str] = None, q: Optional[str] = None):
     return [enrich(r) for r in rows]
 
 @fastapi_app.get("/api/leads/today")
-def get_today_api():
+def get_today_api(user: dict = Depends(get_current_user)):
     return [enrich(r) for r in db_get_today()]
 
 @fastapi_app.get("/api/leads/{lid}")
-def get_lead_api(lid: str):
+def get_lead_api(lid: str, user: dict = Depends(get_current_user)):
     row = db_get_lead(lid)
     if not row:
         raise HTTPException(404, "Lead not found")
     return enrich(row)
 
 @fastapi_app.post("/api/leads", status_code=201)
-def create_lead(body: LeadCreate):
-    lid = db_add_lead_full(body.name, body.phone, body.call_time, body.notes or "", body.tags or "")
-    # Telegram notification
-    msg = f"🆕 <b>ליד חדש מהאפליקציה!</b>\n👤 {body.name}\n📱 {body.phone}"
+def create_lead(body: LeadCreate, user: dict = Depends(get_current_user)):
+    created_by = user.get("display_name") or user.get("username", "")
+    lid = db_add_lead_full(body.name, body.phone, body.call_time, body.notes or "", body.tags or "", created_by)
+    msg = f"🆕 <b>ליד חדש!</b>\n👤 {body.name}\n📱 {body.phone}\n➕ נוסף ע״י {created_by}"
     if body.call_time:
         msg += f"\n📅 {body.call_time}"
     if body.notes:
@@ -1087,7 +1220,7 @@ def create_lead(body: LeadCreate):
     return {"id": lid, "message": "Lead created"}
 
 @fastapi_app.put("/api/leads/{lid}")
-def update_lead_api(lid: str, body: LeadUpdate):
+def update_lead_api(lid: str, body: LeadUpdate, user: dict = Depends(get_current_user)):
     with _db() as conn:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute("SELECT * FROM leads WHERE id=%s", (lid,))
@@ -1109,12 +1242,12 @@ def update_lead_api(lid: str, body: LeadUpdate):
     return {"message": "Updated"}
 
 @fastapi_app.delete("/api/leads/{lid}")
-def delete_lead_api(lid: str):
+def delete_lead_api(lid: str, user: dict = Depends(get_current_user)):
     db_delete_lead(lid)
     return {"message": "Deleted"}
 
 @fastapi_app.get("/api/stats")
-def get_stats():
+def get_stats(user: dict = Depends(get_current_user)):
     now       = datetime.now(TZ)
     week_ago  = (now - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%S")
     month_ago = now.replace(day=1, hour=0, minute=0, second=0).strftime("%Y-%m-%dT%H:%M:%S")
@@ -1181,38 +1314,8 @@ def get_stats():
     }
 
 @fastapi_app.get("/api/export")
-def export_excel():
-    buf = io.BytesIO()
-    wb  = openpyxl.Workbook()
-    ws  = wb.active
-    ws.title = "לידים"
-    hf = Font(bold=True, color="FFFFFF")
-    hb = PatternFill("solid", fgColor="2B579A")
-    ca = Alignment(horizontal="center")
-    headers = ["מזהה", "שם", "טלפון", "שעת שיחה", "סטטוס", "סכום", "הערות", "נוצר"]
-    keys    = ["id", "name", "phone", "call_time", "status", "sale_amount", "notes", "created_at"]
-    for ci, h in enumerate(headers, 1):
-        c = ws.cell(1, ci, h); c.font = hf; c.fill = hb; c.alignment = ca
-    for ri, row in enumerate(db_get_all(), 2):
-        for ci, key in enumerate(keys, 1):
-            val = row.get(key, "")
-            if key == "status":
-                val = STATUS_HEB.get(str(val), str(val))
-            elif key in ("call_time", "created_at") and val:
-                try:
-                    val = datetime.strptime(str(val)[:19], "%Y-%m-%dT%H:%M:%S").strftime("%d/%m/%Y %H:%M")
-                except Exception:
-                    pass
-            elif key == "sale_amount" and val:
-                try:
-                    val = f"₪{float(val):,.0f}"
-                except Exception:
-                    pass
-            ws.cell(ri, ci, str(val) if val else "")
-    for col in ws.columns:
-        mx = max((len(str(c.value or "")) for c in col), default=0)
-        ws.column_dimensions[col[0].column_letter].width = min(mx + 4, 40)
-    wb.save(buf); buf.seek(0)
+def export_excel(user: dict = Depends(get_current_user)):
+    buf   = build_excel()
     fname = f"leads_{datetime.now(TZ).strftime('%d%m%Y_%H%M')}.xlsx"
     return StreamingResponse(
         buf,
@@ -1220,18 +1323,8 @@ def export_excel():
         headers={"Content-Disposition": f"attachment; filename={fname}"}
     )
 
-@fastapi_app.get("/api/app-config")
-def app_config():
-    return {"pin_required": bool(APP_PIN), "version": "2.1"}
-
-@fastapi_app.post("/api/verify-pin")
-def verify_pin(body: PinBody):
-    if body.pin == APP_PIN:
-        return {"ok": True}
-    raise HTTPException(401, "PIN שגוי")
-
 @fastapi_app.get("/api/test-telegram")
-def test_telegram():
+def test_telegram(user: dict = Depends(get_current_user)):
     if not BOT_TOKEN:
         return {"ok": False, "error": "BOT_TOKEN לא הוגדר"}
     if not OWNER_CHAT_ID:
@@ -1272,7 +1365,7 @@ def serve_app():
             return HTMLResponse(f.read())
     return HTMLResponse("<h1>index.html not found</h1>", 404)
 
-# ── Telegram helper (HTTP fallback for new lead notifications) ────────────────
+# ── Telegram helper ───────────────────────────────────────────────────────────
 
 def _send_tg(text: str):
     if not BOT_TOKEN or not OWNER_CHAT_ID:
