@@ -980,7 +980,7 @@ def run_bot_thread():
     bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     logger.info("Bot polling started 🚀")
-    bot_app.run_polling(drop_pending_updates=True)
+    bot_app.run_polling(drop_pending_updates=True, stop_signals=None)
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  FASTAPI APPLICATION
