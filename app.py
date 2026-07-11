@@ -1,19 +1,30 @@
 #!/usr/bin/env python3
 """
-Bar Lead Manager — Unified Render Deployment
+Bar Lead Manager v4.0 — Unified Render Deployment
 FastAPI (REST + PWA) + Telegram Bot + APScheduler + Multi-User Auth
 PostgreSQL via psycopg2
 
-Environment variables required:
-  DATABASE_URL   — PostgreSQL connection string
-  BOT_TOKEN      — Telegram bot token
-  OWNER_CHAT_ID  — Telegram chat ID of the owner
-  PORT           — Port to listen on (Render sets this automatically)
+Required environment variables:
+  DATABASE_URL      — PostgreSQL connection string
+  BOT_TOKEN         — Telegram bot token
+  OWNER_CHAT_ID     — Telegram chat ID of the owner
+  PORT              — Port to listen on (Render sets this automatically)
+
+Optional environment variables:
+  SMTP_HOST         — SMTP server host (e.g. smtp.gmail.com)
+  SMTP_PORT         — SMTP port (default 587)
+  SMTP_USER         — SMTP email address / username
+  SMTP_PASS         — SMTP password or app password
+  APP_URL           — Public app URL (e.g. https://bar-lead-bot.onrender.com)
+  OPEN_REGISTRATION — Allow public self-registration (default: true)
 """
 
-import asyncio, hashlib, hmac as _hmac, io, json, logging, os, secrets, threading, uuid
+import asyncio, csv, hashlib, hmac as _hmac, io, json, logging, os
+import secrets, smtplib, threading, uuid
 from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timedelta
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from typing import Optional
 from zoneinfo import ZoneInfo
 import urllib.request as _ureq
@@ -22,7 +33,7 @@ import psycopg2
 import psycopg2.extras
 import psycopg2.pool
 
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -41,18 +52,24 @@ from telegram.ext import (
 )
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-# ── Config ───────────────────────────────────────────────────────────────────
-BOT_TOKEN     = os.getenv("BOT_TOKEN", "")
-OWNER_CHAT_ID = int(os.getenv("OWNER_CHAT_ID", "0"))
-DATABASE_URL  = os.getenv("DATABASE_URL", "")
-PORT          = int(os.getenv("PORT", "8080"))
-TZ            = ZoneInfo("Asia/Jerusalem")
-STATIC_DIR    = os.path.dirname(os.path.abspath(__file__))
+# ── Config ────────────────────────────────────────────────────────────────────
+BOT_TOKEN         = os.getenv("BOT_TOKEN", "")
+OWNER_CHAT_ID     = int(os.getenv("OWNER_CHAT_ID", "0"))
+DATABASE_URL      = os.getenv("DATABASE_URL", "")
+PORT              = int(os.getenv("PORT", "8080"))
+SMTP_HOST         = os.getenv("SMTP_HOST", "")
+SMTP_PORT_NUM     = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER         = os.getenv("SMTP_USER", "")
+SMTP_PASS         = os.getenv("SMTP_PASS", "")
+APP_URL           = os.getenv("APP_URL", "")
+OPEN_REGISTRATION = os.getenv("OPEN_REGISTRATION", "true").lower() != "false"
+TZ                = ZoneInfo("Asia/Jerusalem")
+STATIC_DIR        = os.path.dirname(os.path.abspath(__file__))
 
 logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ── Status constants ──────────────────────────────────────────────────────────
+# ── Status / Source / Package constants ───────────────────────────────────────
 ST_NEW          = "new"
 ST_PRE_REMINDED = "pre_reminded"
 ST_CALLED       = "called"
@@ -69,11 +86,24 @@ STATUS_EMOJI = {
     ST_NEW: "🆕", ST_PRE_REMINDED: "⏰", ST_CALLED: "📞",
     ST_WON: "✅", ST_LOST: "❌", ST_FOLLOW_UP: "🔄", ST_OLD: "📁",
 }
+SOURCE_HEB = {
+    "instagram": "אינסטגרם",
+    "facebook":  "פייסבוק",
+    "tiktok":    "טיקטוק",
+    "referral":  "המלצה",
+    "website":   "אתר",
+    "phone":     "טלפון נכנס",
+    "other":     "אחר",
+}
+PACKAGE_HEB = {
+    "basic":    "בסיסי",
+    "standard": "סטנדרט",
+    "premium":  "פרמיום",
+    "vip":      "VIP",
+    "custom":   "מותאם",
+}
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  DATABASE (PostgreSQL via psycopg2)
-# ─────────────────────────────────────────────────────────────────────────────
-
+# ── DB pool ───────────────────────────────────────────────────────────────────
 _pool: Optional[psycopg2.pool.ThreadedConnectionPool] = None
 
 def get_pool() -> psycopg2.pool.ThreadedConnectionPool:
@@ -129,11 +159,18 @@ def ensure_db():
                 updated_at     TEXT,
                 follow_up_time TEXT,
                 tags           TEXT DEFAULT '',
-                created_by     TEXT DEFAULT ''
+                created_by     TEXT DEFAULT '',
+                source         TEXT DEFAULT '',
+                package        TEXT DEFAULT '',
+                user_id        TEXT DEFAULT ''
             )
         """)
-        cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS tags TEXT DEFAULT ''")
-        cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS created_by TEXT DEFAULT ''")
+        # Add new columns to existing databases
+        for col, default in [
+            ("tags", "''"), ("created_by", "''"), ("source", "''"),
+            ("package", "''"), ("user_id", "''"),
+        ]:
+            cur.execute(f"ALTER TABLE leads ADD COLUMN IF NOT EXISTS {col} TEXT DEFAULT {default}")
         # Users table
         cur.execute("""
             CREATE TABLE IF NOT EXISTS users (
@@ -141,9 +178,11 @@ def ensure_db():
                 username      TEXT UNIQUE NOT NULL,
                 password_hash TEXT NOT NULL,
                 display_name  TEXT DEFAULT '',
-                created_at    TEXT
+                created_at    TEXT,
+                is_admin      BOOLEAN DEFAULT FALSE
             )
         """)
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN DEFAULT FALSE")
         # Sessions table
         cur.execute("""
             CREATE TABLE IF NOT EXISTS sessions (
@@ -153,26 +192,43 @@ def ensure_db():
                 expires_at TEXT
             )
         """)
+        # Password reset tokens
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS reset_tokens (
+                token      TEXT PRIMARY KEY,
+                user_id    TEXT NOT NULL,
+                code       TEXT NOT NULL,
+                created_at TEXT,
+                expires_at TEXT,
+                used       BOOLEAN DEFAULT FALSE
+            )
+        """)
+        # Push notification subscriptions
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS push_subscriptions (
+                id           TEXT PRIMARY KEY,
+                user_id      TEXT NOT NULL,
+                subscription TEXT NOT NULL,
+                created_at   TEXT
+            )
+        """)
     logger.info("DB ✓")
 
 # ── Auth helpers ──────────────────────────────────────────────────────────────
-
 def hash_password(password: str) -> str:
-    """PBKDF2-HMAC-SHA256 with random salt."""
     salt = secrets.token_hex(16)
-    key = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 100_000)
+    key  = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 100_000)
     return f"{salt}:{key.hex()}"
 
 def verify_password(password: str, stored: str) -> bool:
     try:
         salt, key_hex = stored.split(":", 1)
-        key = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 100_000)
+        key = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 100_000)
         return _hmac.compare_digest(key.hex(), key_hex)
     except Exception:
         return False
 
-# ── User & Session DB ─────────────────────────────────────────────────────────
-
+# ── User / Session DB ─────────────────────────────────────────────────────────
 def db_count_users() -> int:
     with _db() as conn:
         cur = conn.cursor()
@@ -187,17 +243,20 @@ def db_get_user_by_username(username: str) -> Optional[dict]:
     return dict(row) if row else None
 
 def db_create_user(username: str, password: str, display_name: str = "") -> str:
-    uid = str(uuid.uuid4())[:8].upper()
+    uid      = str(uuid.uuid4())[:8].upper()
+    is_admin = db_count_users() == 0  # First user is always admin
     with _db() as conn:
         cur = conn.cursor()
         cur.execute(
-            "INSERT INTO users (id, username, password_hash, display_name, created_at) VALUES (%s,%s,%s,%s,%s)",
-            (uid, username.lower().strip(), hash_password(password), display_name or username, _now())
+            "INSERT INTO users (id, username, password_hash, display_name, created_at, is_admin) "
+            "VALUES (%s,%s,%s,%s,%s,%s)",
+            (uid, username.lower().strip(), hash_password(password),
+             display_name or username, _now(), is_admin)
         )
     return uid
 
 def db_create_session(user_id: str) -> str:
-    token = secrets.token_urlsafe(32)
+    token   = secrets.token_urlsafe(32)
     expires = (datetime.now(TZ) + timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%S")
     with _db() as conn:
         cur = conn.cursor()
@@ -212,7 +271,7 @@ def db_get_user_by_token(token: str) -> Optional[dict]:
     with _db() as conn:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute("""
-            SELECT u.id, u.username, u.display_name, u.created_at
+            SELECT u.id, u.username, u.display_name, u.created_at, u.is_admin
             FROM users u
             JOIN sessions s ON s.user_id = u.id
             WHERE s.token = %s AND s.expires_at > %s
@@ -228,23 +287,103 @@ def db_delete_session(token: str):
 def db_list_users() -> list:
     with _db() as conn:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute("SELECT id, username, display_name, created_at FROM users ORDER BY created_at")
+        cur.execute("""
+            SELECT u.id, u.username, u.display_name, u.created_at, u.is_admin,
+                   COUNT(l.id) AS lead_count
+            FROM users u
+            LEFT JOIN leads l ON l.user_id = u.id
+            GROUP BY u.id, u.username, u.display_name, u.created_at, u.is_admin
+            ORDER BY u.created_at
+        """)
         return [dict(r) for r in cur.fetchall()]
 
-# ── FastAPI Auth Dependency ───────────────────────────────────────────────────
+def db_get_first_user_id() -> Optional[str]:
+    """Get the first created user's ID — used for Telegram-added leads."""
+    with _db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT id FROM users ORDER BY created_at LIMIT 1")
+        row = cur.fetchone()
+    return row[0] if row else None
 
-_bearer = HTTPBearer(auto_error=False)
+# ── Password reset ────────────────────────────────────────────────────────────
+def db_create_reset_token(user_id: str) -> str:
+    """Generate a 6-digit reset code, store it, return the code."""
+    code    = str(secrets.randbelow(900000) + 100000)  # always 6 digits
+    token   = secrets.token_urlsafe(32)
+    expires = (datetime.now(TZ) + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S")
+    with _db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE reset_tokens SET used=TRUE WHERE user_id=%s AND used=FALSE", (user_id,)
+        )
+        cur.execute(
+            "INSERT INTO reset_tokens (token, user_id, code, created_at, expires_at) "
+            "VALUES (%s,%s,%s,%s,%s)",
+            (token, user_id, code, _now(), expires)
+        )
+    return code
 
-def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer)) -> dict:
-    if not credentials:
-        raise HTTPException(401, "נדרשת התחברות")
-    user = db_get_user_by_token(credentials.credentials)
+def db_verify_reset_code(username: str, code: str) -> Optional[str]:
+    """Verify a reset code; return user_id if valid, None otherwise."""
+    now  = _now()
+    user = db_get_user_by_username(username)
     if not user:
-        raise HTTPException(401, "הסשן פג תוקף — התחבר מחדש")
-    return user
+        return None
+    with _db() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("""
+            SELECT * FROM reset_tokens
+            WHERE user_id=%s AND code=%s AND used=FALSE AND expires_at > %s
+            ORDER BY created_at DESC LIMIT 1
+        """, (user["id"], code, now))
+        row = cur.fetchone()
+        if not row:
+            return None
+        cur.execute("UPDATE reset_tokens SET used=TRUE WHERE token=%s", (row["token"],))
+    return user["id"]
 
-# ── Shared DB operations ──────────────────────────────────────────────────────
+def db_update_password(user_id: str, new_password: str):
+    with _db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE users SET password_hash=%s WHERE id=%s",
+            (hash_password(new_password), user_id)
+        )
 
+# ── Push subscriptions ────────────────────────────────────────────────────────
+def db_save_push_subscription(user_id: str, subscription_json: str):
+    sub_id = str(uuid.uuid4())[:8]
+    with _db() as conn:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM push_subscriptions WHERE user_id=%s", (user_id,))
+        cur.execute(
+            "INSERT INTO push_subscriptions (id, user_id, subscription, created_at) "
+            "VALUES (%s,%s,%s,%s)",
+            (sub_id, user_id, subscription_json, _now())
+        )
+
+# ── Email helper ──────────────────────────────────────────────────────────────
+def send_email(to_email: str, subject: str, body_html: str) -> bool:
+    if not SMTP_HOST or not SMTP_USER or not SMTP_PASS:
+        logger.warning("SMTP not configured — email not sent")
+        return False
+    try:
+        msg            = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"]    = SMTP_USER
+        msg["To"]      = to_email
+        msg.attach(MIMEText(body_html, "html", "utf-8"))
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT_NUM, timeout=10) as server:
+            server.ehlo()
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASS)
+            server.sendmail(SMTP_USER, [to_email], msg.as_string())
+        return True
+    except Exception as e:
+        logger.error(f"send_email: {e}")
+        return False
+
+# ── Lead DB operations ────────────────────────────────────────────────────────
 def db_get_lead(lid: str) -> Optional[dict]:
     with _db() as conn:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -252,70 +391,103 @@ def db_get_lead(lid: str) -> Optional[dict]:
         row = cur.fetchone()
     return dict(row) if row else None
 
-def db_get_all() -> list:
+def db_get_all(user_id: Optional[str] = None) -> list:
     with _db() as conn:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute("SELECT * FROM leads ORDER BY call_time")
+        if user_id:
+            cur.execute("SELECT * FROM leads WHERE user_id=%s ORDER BY call_time", (user_id,))
+        else:
+            cur.execute("SELECT * FROM leads ORDER BY call_time")
         return [dict(r) for r in cur.fetchall()]
 
-def db_get_active() -> list:
+def db_get_active(user_id: Optional[str] = None) -> list:
     with _db() as conn:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute(
-            "SELECT * FROM leads WHERE status IN (%s,%s,%s,%s) ORDER BY call_time",
-            (ST_NEW, ST_PRE_REMINDED, ST_CALLED, ST_FOLLOW_UP)
-        )
+        if user_id:
+            cur.execute(
+                "SELECT * FROM leads WHERE status IN (%s,%s,%s,%s) AND user_id=%s ORDER BY call_time",
+                (ST_NEW, ST_PRE_REMINDED, ST_CALLED, ST_FOLLOW_UP, user_id)
+            )
+        else:
+            cur.execute(
+                "SELECT * FROM leads WHERE status IN (%s,%s,%s,%s) ORDER BY call_time",
+                (ST_NEW, ST_PRE_REMINDED, ST_CALLED, ST_FOLLOW_UP)
+            )
         return [dict(r) for r in cur.fetchall()]
 
-def db_get_today() -> list:
+def db_get_today(user_id: Optional[str] = None) -> list:
     today = datetime.now(TZ).strftime("%Y-%m-%d")
     with _db() as conn:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute(
-            "SELECT * FROM leads WHERE call_time LIKE %s ORDER BY call_time",
-            (f"{today}%",)
-        )
+        if user_id:
+            cur.execute(
+                "SELECT * FROM leads WHERE call_time LIKE %s AND user_id=%s ORDER BY call_time",
+                (f"{today}%", user_id)
+            )
+        else:
+            cur.execute(
+                "SELECT * FROM leads WHERE call_time LIKE %s ORDER BY call_time", (f"{today}%",)
+            )
         return [dict(r) for r in cur.fetchall()]
 
-def db_get_old() -> list:
+def db_get_old(user_id: Optional[str] = None) -> list:
     with _db() as conn:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute("SELECT * FROM leads WHERE status=%s ORDER BY updated_at DESC", (ST_OLD,))
+        if user_id:
+            cur.execute(
+                "SELECT * FROM leads WHERE status=%s AND user_id=%s ORDER BY updated_at DESC",
+                (ST_OLD, user_id)
+            )
+        else:
+            cur.execute("SELECT * FROM leads WHERE status=%s ORDER BY updated_at DESC", (ST_OLD,))
         return [dict(r) for r in cur.fetchall()]
 
-def db_search(query: str) -> list:
+def db_search(query: str, user_id: Optional[str] = None) -> list:
     q = f"%{query.lower()}%"
     with _db() as conn:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute(
-            "SELECT * FROM leads WHERE LOWER(name) LIKE %s OR phone LIKE %s",
-            (q, q)
-        )
+        if user_id:
+            cur.execute(
+                "SELECT * FROM leads WHERE (LOWER(name) LIKE %s OR phone LIKE %s) AND user_id=%s",
+                (q, q, user_id)
+            )
+        else:
+            cur.execute(
+                "SELECT * FROM leads WHERE LOWER(name) LIKE %s OR phone LIKE %s", (q, q)
+            )
         return [dict(r) for r in cur.fetchall()]
 
-def db_add_lead(name: str, phone: str, call_dt) -> str:
-    lid = str(uuid.uuid4())[:8].upper()
-    now = _now()
+def db_add_lead(name: str, phone: str, call_dt, user_id: str = "") -> str:
+    lid       = str(uuid.uuid4())[:8].upper()
+    now       = _now()
     call_time = call_dt.strftime("%Y-%m-%dT%H:%M:%S") if call_dt else None
+    if not user_id:
+        user_id = db_get_first_user_id() or ""
     with _db() as conn:
         cur = conn.cursor()
         cur.execute(
-            "INSERT INTO leads (id, name, phone, call_time, status, created_at, updated_at) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s)",
-            (lid, name, phone, call_time, ST_NEW, now, now)
+            "INSERT INTO leads (id, name, phone, call_time, status, created_at, updated_at, user_id) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+            (lid, name, phone, call_time, ST_NEW, now, now, user_id)
         )
     return lid
 
 def db_add_lead_full(name: str, phone: str, call_time: Optional[str],
-                     notes: str, tags: str, created_by: str = "") -> str:
+                     notes: str, tags: str, created_by: str = "",
+                     source: str = "", package: str = "", user_id: str = "") -> str:
     lid = str(uuid.uuid4())[:8].upper()
     now = _now()
+    if not user_id:
+        user_id = db_get_first_user_id() or ""
     with _db() as conn:
         cur = conn.cursor()
         cur.execute(
-            "INSERT INTO leads (id, name, phone, call_time, status, notes, tags, created_by, created_at, updated_at) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-            (lid, name, phone, call_time, ST_NEW, notes or "", tags or "", created_by, now, now)
+            "INSERT INTO leads "
+            "(id, name, phone, call_time, status, notes, tags, created_by, "
+            "source, package, user_id, created_at, updated_at) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (lid, name, phone, call_time, ST_NEW, notes or "", tags or "", created_by,
+             source or "", package or "", user_id, now, now)
         )
     return lid
 
@@ -339,12 +511,10 @@ def db_get_leads_pre_reminder() -> list:
     out = []
     with _db() as conn:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute(
-            "SELECT * FROM leads WHERE status=%s AND call_time IS NOT NULL", (ST_NEW,)
-        )
+        cur.execute("SELECT * FROM leads WHERE status=%s AND call_time IS NOT NULL", (ST_NEW,))
         rows = cur.fetchall()
     for r in rows:
-        dt = _parse_dt(str(r.get("call_time", "")))
+        dt   = _parse_dt(str(r.get("call_time", "")))
         if dt is None:
             continue
         diff = (dt - now).total_seconds() / 60
@@ -363,7 +533,7 @@ def db_get_leads_post_call() -> list:
         )
         rows = cur.fetchall()
     for r in rows:
-        dt = _parse_dt(str(r.get("call_time", "")))
+        dt   = _parse_dt(str(r.get("call_time", "")))
         if dt is None:
             continue
         diff = (now - dt).total_seconds() / 60
@@ -391,34 +561,67 @@ def db_get_stale_leads() -> list:
         )
         return [dict(r) for r in cur.fetchall()]
 
-def db_stats_since(since: str) -> dict:
+def db_stats_since(since: str, user_id: Optional[str] = None) -> dict:
+    uid_filter = "AND user_id=%s" if user_id else ""
+    uid_params = [user_id] if user_id else []
     with _db() as conn:
         cur = conn.cursor()
-        cur.execute("SELECT COUNT(*) FROM leads WHERE created_at >= %s", (since,))
+        cur.execute(
+            f"SELECT COUNT(*) FROM leads WHERE created_at >= %s {uid_filter}",
+            [since] + uid_params
+        )
         total = cur.fetchone()[0]
         cur.execute(
-            "SELECT COUNT(*), COALESCE(SUM(sale_amount),0) FROM leads "
-            "WHERE status=%s AND created_at >= %s",
-            (ST_WON, since)
+            f"SELECT COUNT(*), COALESCE(SUM(sale_amount),0) FROM leads "
+            f"WHERE status=%s AND created_at >= %s {uid_filter}",
+            [ST_WON, since] + uid_params
         )
         won = cur.fetchone()
         cur.execute(
-            "SELECT COUNT(*) FROM leads WHERE status=%s AND created_at >= %s",
-            (ST_LOST, since)
+            f"SELECT COUNT(*) FROM leads WHERE status=%s AND created_at >= %s {uid_filter}",
+            [ST_LOST, since] + uid_params
         )
         lost = cur.fetchone()[0]
         cur.execute(
-            "SELECT COUNT(*) FROM leads WHERE status IN (%s,%s,%s,%s) AND created_at >= %s",
-            (ST_NEW, ST_PRE_REMINDED, ST_CALLED, ST_FOLLOW_UP, since)
+            f"SELECT COUNT(*) FROM leads WHERE status IN (%s,%s,%s,%s) AND created_at >= %s {uid_filter}",
+            [ST_NEW, ST_PRE_REMINDED, ST_CALLED, ST_FOLLOW_UP, since] + uid_params
         )
         active = cur.fetchone()[0]
     return {
-        "total": total,
-        "won_count": won[0],
+        "total":      total,
+        "won_count":  won[0],
         "won_amount": float(won[1]),
-        "lost": lost,
-        "active": active
+        "lost":       lost,
+        "active":     active,
     }
+
+def db_source_counts(user_id: Optional[str] = None) -> dict:
+    """Return leads count grouped by source for a user."""
+    with _db() as conn:
+        cur = conn.cursor()
+        if user_id:
+            cur.execute(
+                "SELECT COALESCE(NULLIF(source,''),'other'), COUNT(*) "
+                "FROM leads WHERE user_id=%s GROUP BY source",
+                (user_id,)
+            )
+        else:
+            cur.execute(
+                "SELECT COALESCE(NULLIF(source,''),'other'), COUNT(*) FROM leads GROUP BY source"
+            )
+        return {row[0]: row[1] for row in cur.fetchall()}
+
+def db_calendar_leads(user_id: str, from_dt: str, to_dt: str) -> list:
+    """Get leads with call_time in [from_dt, to_dt] for calendar view."""
+    with _db() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(
+            "SELECT * FROM leads WHERE user_id=%s "
+            "AND call_time IS NOT NULL AND call_time >= %s AND call_time <= %s "
+            "ORDER BY call_time",
+            (user_id, from_dt, to_dt)
+        )
+        return [dict(r) for r in cur.fetchall()]
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  TELEGRAM BOT
@@ -514,23 +717,29 @@ def edit_field_kb(lid: str) -> InlineKeyboardMarkup:
         [InlineKeyboardButton("🗑 מחיקת ליד",        callback_data=f"edf_{lid}_delete")],
     ])
 
-def build_excel() -> io.BytesIO:
+def build_excel(user_id: Optional[str] = None) -> io.BytesIO:
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "לידים"
     hf = Font(bold=True, color="FFFFFF")
     hb = PatternFill("solid", fgColor="2B579A")
     ca = Alignment(horizontal="center")
-    col_labels = ["מזהה", "שם", "טלפון", "שעת שיחה", "סטטוס", "סכום מכירה", "הערות", "נוצר ע״י", "נוצר"]
-    col_keys   = ["id",   "name", "phone", "call_time", "status", "sale_amount", "notes", "created_by", "created_at"]
+    col_labels = ["מזהה", "שם", "טלפון", "שעת שיחה", "סטטוס", "מקור",
+                  "חבילה", "סכום מכירה", "הערות", "תגיות", "נוצר ע״י", "נוצר"]
+    col_keys   = ["id", "name", "phone", "call_time", "status", "source",
+                  "package", "sale_amount", "notes", "tags", "created_by", "created_at"]
     for ci, label in enumerate(col_labels, 1):
         cell = ws.cell(row=1, column=ci, value=label)
         cell.font = hf; cell.fill = hb; cell.alignment = ca
-    for ri, row in enumerate(db_get_all(), 2):
+    for ri, row in enumerate(db_get_all(user_id), 2):
         for ci, key in enumerate(col_keys, 1):
             val = row.get(key, "")
             if key == "status":
                 val = STATUS_HEB.get(str(val), str(val))
+            elif key == "source":
+                val = SOURCE_HEB.get(str(val), str(val) or "")
+            elif key == "package":
+                val = PACKAGE_HEB.get(str(val), str(val) or "")
             elif key in ("call_time", "created_at") and val:
                 dt = _parse_dt(str(val))
                 if dt:
@@ -620,7 +829,7 @@ async def cmd_start(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown", reply_markup=MAIN_MENU)
 
 async def show_today(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    leads = db_get_today()
+    leads  = db_get_today()
     active = [l for l in leads if l.get("status") in (ST_NEW, ST_PRE_REMINDED, ST_CALLED, ST_FOLLOW_UP)]
     if not active:
         await u.message.reply_text("📅 אין שיחות מתוכננות להיום! 🎉", reply_markup=MAIN_MENU)
@@ -922,9 +1131,9 @@ async def callback_handler(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def job_check_reminders(app):
     for ld in db_get_leads_pre_reminder():
         try:
-            dt = _parse_dt(str(ld.get("call_time", "")))
+            dt       = _parse_dt(str(ld.get("call_time", "")))
             time_str = dt.strftime('%H:%M') if dt else "—"
-            now = datetime.now(TZ)
+            now      = datetime.now(TZ)
             mins_left = int((dt - now).total_seconds() / 60) if dt else 20
             await app.bot.send_message(
                 chat_id=OWNER_CHAT_ID,
@@ -1071,10 +1280,10 @@ async def lifespan(app: FastAPI):
     ensure_db()
     t = threading.Thread(target=run_bot_thread, daemon=True, name="telegram-bot")
     t.start()
-    logger.info("🍸 Bar Lead Manager started")
+    logger.info("🍸 Bar Lead Manager v4.0 started")
     yield
 
-fastapi_app = FastAPI(title="Bar Lead Manager API", lifespan=lifespan)
+fastapi_app = FastAPI(title="Bar Lead Manager API v4", lifespan=lifespan)
 fastapi_app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
@@ -1083,11 +1292,13 @@ fastapi_app.add_middleware(
 # ── Pydantic models ───────────────────────────────────────────────────────────
 
 class LeadCreate(BaseModel):
-    name:      str = Field(..., min_length=1, max_length=200)
-    phone:     str = Field(..., min_length=1, max_length=50)
-    call_time: Optional[str] = None
-    notes:     Optional[str] = ""
-    tags:      Optional[str] = ""
+    name:      str            = Field(..., min_length=1, max_length=200)
+    phone:     str            = Field(..., min_length=1, max_length=50)
+    call_time: Optional[str]  = None
+    notes:     Optional[str]  = ""
+    tags:      Optional[str]  = ""
+    source:    Optional[str]  = ""
+    package:   Optional[str]  = ""
 
     @field_validator("name", "phone", mode="before")
     @classmethod
@@ -1105,6 +1316,8 @@ class LeadUpdate(BaseModel):
     notes:          Optional[str]   = None
     follow_up_time: Optional[str]   = None
     tags:           Optional[str]   = None
+    source:         Optional[str]   = None
+    package:        Optional[str]   = None
 
 class RegisterRequest(BaseModel):
     username:     str = Field(..., min_length=3, max_length=50)
@@ -1115,20 +1328,57 @@ class LoginRequest(BaseModel):
     username: str
     password: str
 
+class ForgotPasswordRequest(BaseModel):
+    username: str
+
+class ResetPasswordRequest(BaseModel):
+    username:     str
+    code:         str
+    new_password: str = Field(..., min_length=6)
+
+class PushSubscribeRequest(BaseModel):
+    subscription: dict
+
 def enrich(d: dict) -> dict:
     d["status_heb"]   = STATUS_HEB.get(d.get("status", ""), d.get("status", ""))
     d["status_emoji"] = STATUS_EMOJI.get(d.get("status", ""), "")
+    d["source_heb"]   = SOURCE_HEB.get(d.get("source") or "", d.get("source") or "")
+    d["package_heb"]  = PACKAGE_HEB.get(d.get("package") or "", d.get("package") or "")
     return d
+
+# ── Admin dependency ──────────────────────────────────────────────────────────
+
+_bearer = HTTPBearer(auto_error=False)
+
+def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer)) -> dict:
+    if not credentials:
+        raise HTTPException(401, "נדרשת התחברות")
+    user = db_get_user_by_token(credentials.credentials)
+    if not user:
+        raise HTTPException(401, "הסשן פג תוקף — התחבר מחדש")
+    return user
+
+def require_admin(user: dict = Depends(get_current_user)) -> dict:
+    if not user.get("is_admin"):
+        raise HTTPException(403, "נדרשת הרשאת מנהל")
+    return user
 
 # ── Auth Routes ───────────────────────────────────────────────────────────────
 
 @fastapi_app.get("/api/app-config")
 def app_config():
     has_users = db_count_users() > 0
-    return {"auth_type": "login", "has_users": has_users, "version": "3.0"}
+    return {
+        "auth_type":         "login",
+        "has_users":         has_users,
+        "version":           "4.0",
+        "open_registration": OPEN_REGISTRATION,
+    }
 
 @fastapi_app.post("/api/auth/register", status_code=201)
 def register(body: RegisterRequest):
+    if not OPEN_REGISTRATION and db_count_users() > 0:
+        raise HTTPException(403, "הרשמה סגורה — פנה למנהל המערכת")
     if db_get_user_by_username(body.username):
         raise HTTPException(400, "שם המשתמש כבר קיים")
     uid   = db_create_user(body.username.strip(), body.password, body.display_name or body.username)
@@ -1144,7 +1394,12 @@ def login(body: LoginRequest):
     token = db_create_session(user["id"])
     return {
         "token": token,
-        "user": {"id": user["id"], "username": user["username"], "display_name": user["display_name"]}
+        "user": {
+            "id": user["id"],
+            "username": user["username"],
+            "display_name": user["display_name"],
+            "is_admin": user.get("is_admin", False),
+        }
     }
 
 @fastapi_app.post("/api/auth/logout")
@@ -1157,41 +1412,104 @@ def logout(credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer
 def get_me(user: dict = Depends(get_current_user)):
     return user
 
-@fastapi_app.get("/api/auth/users")
-def list_users_api(user: dict = Depends(get_current_user)):
-    return db_list_users()
+@fastapi_app.post("/api/auth/forgot-password")
+def forgot_password(body: ForgotPasswordRequest):
+    user = db_get_user_by_username(body.username.strip())
+    if not user:
+        # Don't reveal whether the user exists
+        return {"message": "אם המשתמש קיים, נוצר קוד איפוס"}
+    code = db_create_reset_token(user["id"])
+    # If SMTP not configured, return code directly (dev/setup mode)
+    if not SMTP_HOST:
+        return {"message": "קוד איפוס נוצר", "code": code}
+    # TODO: send email if user has email field stored
+    return {"message": "קוד איפוס נוצר", "code": code}
 
-# ── Protected API Routes ──────────────────────────────────────────────────────
+@fastapi_app.post("/api/auth/reset-password")
+def reset_password(body: ResetPasswordRequest):
+    uid = db_verify_reset_code(body.username.strip(), body.code.strip())
+    if not uid:
+        raise HTTPException(400, "קוד לא תקין או שפג תוקפו")
+    db_update_password(uid, body.new_password)
+    # Invalidate all active sessions
+    with _db() as conn:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM sessions WHERE user_id=%s", (uid,))
+    return {"message": "סיסמה אופסה בהצלחה — התחבר מחדש"}
+
+# ── Push notifications route ──────────────────────────────────────────────────
+
+@fastapi_app.post("/api/push/subscribe")
+def push_subscribe(body: PushSubscribeRequest, user: dict = Depends(get_current_user)):
+    db_save_push_subscription(user["id"], json.dumps(body.subscription))
+    return {"ok": True}
+
+# ── Lead Routes ───────────────────────────────────────────────────────────────
 
 @fastapi_app.get("/health")
 def health():
     return {"status": "ok"}
 
+@fastapi_app.get("/api/leads/today")
+def get_today_api(user: dict = Depends(get_current_user)):
+    return [enrich(r) for r in db_get_today(user["id"])]
+
+@fastapi_app.get("/api/leads/calendar")
+def get_calendar_leads(
+    from_dt: Optional[str] = None,
+    to_dt:   Optional[str] = None,
+    user: dict = Depends(get_current_user)
+):
+    now = datetime.now(TZ)
+    if not from_dt:
+        from_dt = now.strftime("%Y-%m-%dT00:00:00")
+    if not to_dt:
+        to_dt = (now + timedelta(days=30)).strftime("%Y-%m-%dT23:59:59")
+    rows   = db_calendar_leads(user["id"], from_dt, to_dt)
+    result = {}
+    for r in [enrich(r) for r in rows]:
+        dt = _parse_dt(str(r.get("call_time", "")))
+        if dt:
+            day = dt.strftime("%Y-%m-%d")
+            if day not in result:
+                result[day] = []
+            result[day].append(r)
+    return result
+
 @fastapi_app.get("/api/leads")
-def get_leads(status: Optional[str] = None, q: Optional[str] = None,
-              user: dict = Depends(get_current_user)):
+def get_leads(
+    status: Optional[str] = None,
+    q:      Optional[str] = None,
+    source: Optional[str] = None,
+    user: dict = Depends(get_current_user)
+):
+    uid = user["id"]
     if q:
-        rows = db_search(q)
+        rows = db_search(q, uid)
     elif status:
-        statuses = status.split(",")
+        statuses     = status.split(",")
+        placeholders = ",".join(["%s"] * len(statuses))
         with _db() as conn:
             cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-            placeholders = ",".join(["%s"] * len(statuses))
             cur.execute(
-                f"SELECT * FROM leads WHERE status IN ({placeholders}) ORDER BY call_time",
-                statuses
+                f"SELECT * FROM leads WHERE status IN ({placeholders}) AND user_id=%s ORDER BY call_time",
+                statuses + [uid]
             )
             rows = [dict(r) for r in cur.fetchall()]
     else:
         with _db() as conn:
             cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-            cur.execute("SELECT * FROM leads ORDER BY call_time DESC")
+            if source:
+                cur.execute(
+                    "SELECT * FROM leads WHERE user_id=%s AND source=%s ORDER BY call_time DESC",
+                    (uid, source)
+                )
+            else:
+                cur.execute(
+                    "SELECT * FROM leads WHERE user_id=%s ORDER BY call_time DESC", (uid,)
+                )
             rows = [dict(r) for r in cur.fetchall()]
     return [enrich(r) for r in rows]
-
-@fastapi_app.get("/api/leads/today")
-def get_today_api(user: dict = Depends(get_current_user)):
-    return [enrich(r) for r in db_get_today()]
 
 @fastapi_app.get("/api/leads/{lid}")
 def get_lead_api(lid: str, user: dict = Depends(get_current_user)):
@@ -1203,29 +1521,71 @@ def get_lead_api(lid: str, user: dict = Depends(get_current_user)):
 @fastapi_app.post("/api/leads", status_code=201)
 def create_lead(body: LeadCreate, user: dict = Depends(get_current_user)):
     created_by = user.get("display_name") or user.get("username", "")
-    lid = db_add_lead_full(body.name, body.phone, body.call_time, body.notes or "", body.tags or "", created_by)
+    lid = db_add_lead_full(
+        body.name, body.phone, body.call_time,
+        body.notes or "", body.tags or "", created_by,
+        source=body.source or "", package=body.package or "",
+        user_id=user["id"]
+    )
     msg = f"🆕 <b>ליד חדש!</b>\n👤 {body.name}\n📱 {body.phone}\n➕ נוסף ע״י {created_by}"
     if body.call_time:
         msg += f"\n📅 {body.call_time}"
+    if body.source:
+        msg += f"\n📣 {SOURCE_HEB.get(body.source, body.source)}"
     if body.notes:
         msg += f"\n📝 {body.notes}"
     _send_tg(msg)
     return {"id": lid, "message": "Lead created"}
 
+@fastapi_app.post("/api/leads/import")
+async def import_leads_csv(
+    file: UploadFile = File(...),
+    user: dict = Depends(get_current_user)
+):
+    content = await file.read()
+    try:
+        text = content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = content.decode("windows-1255", errors="replace")
+
+    reader     = csv.DictReader(io.StringIO(text))
+    imported   = 0
+    errors     = []
+    created_by = user.get("display_name") or user.get("username", "")
+
+    for i, row in enumerate(reader, 1):
+        try:
+            name  = (row.get("name") or row.get("שם") or "").strip()
+            phone = (row.get("phone") or row.get("טלפון") or "").strip()
+            if not name or not phone:
+                errors.append(f"שורה {i+1}: חסר שם או טלפון")
+                continue
+            notes     = (row.get("notes") or row.get("הערות") or "").strip()
+            tags      = (row.get("tags") or row.get("תגיות") or "").strip()
+            source    = (row.get("source") or row.get("מקור") or "").strip()
+            package   = (row.get("package") or row.get("חבילה") or "").strip()
+            call_time = (row.get("call_time") or row.get("שעת שיחה") or "").strip() or None
+            db_add_lead_full(
+                name, phone, call_time, notes, tags, created_by,
+                source=source, package=package, user_id=user["id"]
+            )
+            imported += 1
+        except Exception as e:
+            errors.append(f"שורה {i+1}: {str(e)[:60]}")
+
+    return {"imported": imported, "errors": errors[:20]}
+
 @fastapi_app.put("/api/leads/{lid}")
 def update_lead_api(lid: str, body: LeadUpdate, user: dict = Depends(get_current_user)):
-    with _db() as conn:
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute("SELECT * FROM leads WHERE id=%s", (lid,))
-        existing = cur.fetchone()
+    existing = db_get_lead(lid)
     if not existing:
         raise HTTPException(404, "Lead not found")
-    raw = body.model_dump(exclude_unset=True)
+    raw     = body.model_dump(exclude_unset=True)
     updates = {k: v for k, v in raw.items() if not (k in ("name", "phone") and not v)}
     if not updates:
         return {"message": "No changes"}
     if "call_time" in updates and updates["call_time"]:
-        cur_status = dict(existing).get("status", "")
+        cur_status = existing.get("status", "")
         if cur_status in (ST_PRE_REMINDED, ST_CALLED) and "status" not in updates:
             updates["status"] = ST_NEW
     new_status = updates.get("status")
@@ -1239,55 +1599,63 @@ def delete_lead_api(lid: str, user: dict = Depends(get_current_user)):
     db_delete_lead(lid)
     return {"message": "Deleted"}
 
+# ── Stats ─────────────────────────────────────────────────────────────────────
+
 @fastapi_app.get("/api/stats")
 def get_stats(user: dict = Depends(get_current_user)):
+    uid       = user["id"]
     now       = datetime.now(TZ)
     week_ago  = (now - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%S")
     month_ago = now.replace(day=1, hour=0, minute=0, second=0).strftime("%Y-%m-%dT%H:%M:%S")
 
     with _db() as conn:
         cur = conn.cursor()
-        cur.execute("SELECT COUNT(*) FROM leads"); all_total = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM leads WHERE user_id=%s", (uid,))
+        all_total = cur.fetchone()[0]
         cur.execute(
-            "SELECT COUNT(*) FROM leads WHERE status IN (%s,%s,%s,%s)",
-            (ST_NEW, ST_PRE_REMINDED, ST_CALLED, ST_FOLLOW_UP)
-        ); all_active = cur.fetchone()[0]
-        cur.execute("SELECT COUNT(*) FROM leads WHERE status=%s", (ST_OLD,))
+            "SELECT COUNT(*) FROM leads WHERE status IN (%s,%s,%s,%s) AND user_id=%s",
+            (ST_NEW, ST_PRE_REMINDED, ST_CALLED, ST_FOLLOW_UP, uid)
+        )
+        all_active = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM leads WHERE status=%s AND user_id=%s", (ST_OLD, uid))
         all_old = cur.fetchone()[0]
 
         status_counts = {}
         for s in [ST_NEW, ST_PRE_REMINDED, ST_CALLED, ST_WON, ST_LOST, ST_FOLLOW_UP, ST_OLD]:
-            cur.execute("SELECT COUNT(*) FROM leads WHERE status=%s", (s,))
+            cur.execute("SELECT COUNT(*) FROM leads WHERE status=%s AND user_id=%s", (s, uid))
             status_counts[s] = cur.fetchone()[0]
 
         cur.execute(
-            "SELECT created_at, updated_at FROM leads WHERE status=%s", (ST_WON,)
+            "SELECT created_at, updated_at FROM leads WHERE status=%s AND user_id=%s", (ST_WON, uid)
         )
         won_rows = cur.fetchall()
 
         cur.execute(
-            "SELECT AVG(sale_amount) FROM leads WHERE status=%s AND sale_amount > 0", (ST_WON,)
+            "SELECT AVG(sale_amount) FROM leads WHERE status=%s AND sale_amount > 0 AND user_id=%s",
+            (ST_WON, uid)
         )
         avg_sale_row = cur.fetchone()
-        avg_sale = round(avg_sale_row[0] or 0, 0)
+        avg_sale     = round(avg_sale_row[0] or 0, 0)
 
         daily = []
         for i in range(6, -1, -1):
             day    = now - timedelta(days=i)
             prefix = day.strftime("%Y-%m-%d")
             cur.execute(
-                "SELECT COUNT(*) FROM leads WHERE created_at LIKE %s", (f"{prefix}%",)
+                "SELECT COUNT(*) FROM leads WHERE created_at LIKE %s AND user_id=%s",
+                (f"{prefix}%", uid)
             )
-            cnt = cur.fetchone()[0]
-            daily.append({"date": prefix, "label": day.strftime("%d/%m"), "count": cnt})
+            daily.append({"date": prefix, "label": day.strftime("%d/%m"), "count": cur.fetchone()[0]})
+
+    source_counts = db_source_counts(uid)
 
     if won_rows:
         days_list = []
         for r in won_rows:
             try:
                 c = datetime.strptime(str(r[0])[:19], "%Y-%m-%dT%H:%M:%S")
-                u = datetime.strptime(str(r[1])[:19], "%Y-%m-%dT%H:%M:%S")
-                days_list.append((u - c).total_seconds() / 86400)
+                u_dt = datetime.strptime(str(r[1])[:19], "%Y-%m-%dT%H:%M:%S")
+                days_list.append((u_dt - c).total_seconds() / 86400)
             except Exception:
                 pass
         avg_days = round(sum(days_list) / len(days_list), 1) if days_list else 0
@@ -1295,26 +1663,66 @@ def get_stats(user: dict = Depends(get_current_user)):
         avg_days = 0
 
     return {
-        "weekly":            db_stats_since(week_ago),
-        "monthly":           db_stats_since(month_ago),
+        "weekly":            db_stats_since(week_ago, uid),
+        "monthly":           db_stats_since(month_ago, uid),
         "total":             all_total,
         "active":            all_active,
         "old":               all_old,
         "status_counts":     status_counts,
+        "source_counts":     source_counts,
         "avg_days_to_close": avg_days,
         "avg_sale":          avg_sale,
         "daily":             daily,
     }
 
+# ── Export ────────────────────────────────────────────────────────────────────
+
 @fastapi_app.get("/api/export")
 def export_excel(user: dict = Depends(get_current_user)):
-    buf   = build_excel()
+    buf   = build_excel(user["id"])
     fname = f"leads_{datetime.now(TZ).strftime('%d%m%Y_%H%M')}.xlsx"
     return StreamingResponse(
         buf,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename={fname}"}
     )
+
+# ── Admin routes ──────────────────────────────────────────────────────────────
+
+@fastapi_app.get("/api/admin/users")
+def admin_list_users(user: dict = Depends(require_admin)):
+    return db_list_users()
+
+@fastapi_app.get("/api/admin/stats")
+def admin_global_stats(user: dict = Depends(require_admin)):
+    with _db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM users")
+        total_users = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM leads")
+        total_leads = cur.fetchone()[0]
+        cur.execute("SELECT COALESCE(SUM(sale_amount),0) FROM leads WHERE status='won'")
+        total_revenue = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM sessions WHERE expires_at > %s", (_now(),))
+        active_sessions = cur.fetchone()[0]
+    return {
+        "total_users":      total_users,
+        "total_leads":      total_leads,
+        "total_revenue":    float(total_revenue),
+        "active_sessions":  active_sessions,
+    }
+
+@fastapi_app.delete("/api/admin/users/{uid}")
+def admin_delete_user(uid: str, user: dict = Depends(require_admin)):
+    if uid == user["id"]:
+        raise HTTPException(400, "לא ניתן למחוק את עצמך")
+    with _db() as conn:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM sessions WHERE user_id=%s", (uid,))
+        cur.execute("DELETE FROM users WHERE id=%s", (uid,))
+    return {"ok": True}
+
+# ── Misc ──────────────────────────────────────────────────────────────────────
 
 @fastapi_app.get("/api/test-telegram")
 def test_telegram(user: dict = Depends(get_current_user)):
@@ -1380,5 +1788,5 @@ def _send_tg(text: str):
 # ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    print(f"🍸 Bar Lead Manager — http://0.0.0.0:{PORT}")
+    print(f"🍸 Bar Lead Manager v4.0 — http://0.0.0.0:{PORT}")
     uvicorn.run(fastapi_app, host="0.0.0.0", port=PORT)
