@@ -98,6 +98,20 @@ def _db():
 def _now() -> str:
     return datetime.now(TZ).strftime("%Y-%m-%dT%H:%M:%S")
 
+def _parse_dt(s: str) -> Optional[datetime]:
+    """Parse datetime string in either %Y-%m-%dT%H:%M:%S or %Y-%m-%dT%H:%M format."""
+    if not s:
+        return None
+    try:
+        return datetime.strptime(s[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=TZ)
+    except ValueError:
+        pass
+    try:
+        return datetime.strptime(s[:16], "%Y-%m-%dT%H:%M").replace(tzinfo=TZ)
+    except ValueError:
+        pass
+    return None
+
 def ensure_db():
     with _db() as conn:
         cur = conn.cursor()
@@ -330,13 +344,12 @@ def db_get_leads_pre_reminder() -> list:
         )
         rows = cur.fetchall()
     for r in rows:
-        try:
-            dt   = datetime.strptime(r["call_time"][:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=TZ)
-            diff = (dt - now).total_seconds() / 60
-            if 0 <= diff <= 20:
-                out.append(dict(r))
-        except Exception:
-            pass
+        dt = _parse_dt(str(r.get("call_time", "")))
+        if dt is None:
+            continue
+        diff = (dt - now).total_seconds() / 60
+        if 0 <= diff <= 20:
+            out.append(dict(r))
     return out
 
 def db_get_leads_post_call() -> list:
@@ -350,13 +363,12 @@ def db_get_leads_post_call() -> list:
         )
         rows = cur.fetchall()
     for r in rows:
-        try:
-            dt   = datetime.strptime(r["call_time"][:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=TZ)
-            diff = (now - dt).total_seconds() / 60
-            if diff >= 30:
-                out.append(dict(r))
-        except Exception:
-            pass
+        dt = _parse_dt(str(r.get("call_time", "")))
+        if dt is None:
+            continue
+        diff = (now - dt).total_seconds() / 60
+        if diff >= 30:
+            out.append(dict(r))
     return out
 
 def db_get_leads_followup_due() -> list:
@@ -520,10 +532,9 @@ def build_excel() -> io.BytesIO:
             if key == "status":
                 val = STATUS_HEB.get(str(val), str(val))
             elif key in ("call_time", "created_at") and val:
-                try:
-                    val = datetime.strptime(str(val)[:19], "%Y-%m-%dT%H:%M:%S").strftime("%d/%m/%Y %H:%M")
-                except Exception:
-                    pass
+                dt = _parse_dt(str(val))
+                if dt:
+                    val = dt.strftime("%d/%m/%Y %H:%M")
             elif key == "sale_amount" and val:
                 try:
                     val = f"₪{float(val):,.0f}"
@@ -616,12 +627,8 @@ async def show_today(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     lines = [f"📅 *שיחות להיום — {datetime.now(TZ).strftime('%d/%m/%Y')} ({len(active)}):*\n"]
     for ld in active:
-        ct = str(ld.get("call_time", ""))
-        t  = ""
-        try:
-            t = datetime.strptime(ct[:19], "%Y-%m-%dT%H:%M:%S").strftime("%H:%M")
-        except Exception:
-            pass
+        dt = _parse_dt(str(ld.get("call_time", "")))
+        t  = dt.strftime("%H:%M") if dt else "—"
         lines.append(
             f"🕐 *{t}* — {STATUS_EMOJI.get(ld.get('status'), '❓')} "
             f"*{ld['name']}* | 📱{ld.get('phone', '—')}"
@@ -656,10 +663,9 @@ async def show_reminders(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
         ct = str(ld.get("call_time") or ld.get("follow_up_time") or "")
         t  = ""
         if ct:
-            try:
-                t = f" | ⏰ {datetime.strptime(ct[:19], '%Y-%m-%dT%H:%M:%S').strftime('%d/%m %H:%M')}"
-            except Exception:
-                pass
+            dt = _parse_dt(ct)
+            if dt:
+                t = f" | ⏰ {dt.strftime('%d/%m %H:%M')}"
         lines.append(
             f"{STATUS_EMOJI.get(ld.get('status'), '❓')} *{ld['name']}* "
             f"— 📱{ld.get('phone', '—')}{t}"
@@ -705,12 +711,8 @@ async def start_edit(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     buttons = []
     for ld in active[:10]:
-        ct = str(ld.get("call_time", ""))
-        t  = ""
-        try:
-            t = f" {datetime.strptime(ct[:19], '%Y-%m-%dT%H:%M:%S').strftime('%d/%m %H:%M')}"
-        except Exception:
-            pass
+        dt = _parse_dt(str(ld.get("call_time", "")))
+        t  = f" {dt.strftime('%d/%m %H:%M')}" if dt else ""
         buttons.append([InlineKeyboardButton(
             f"{STATUS_EMOJI.get(ld.get('status'), '❓')} {ld['name']}{t}",
             callback_data=f"edit_{ld['id']}"
@@ -769,12 +771,8 @@ async def handle_text(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await u.message.reply_text(
             f"🔍 *{len(results)} תוצאות עבור \"{text}\":*", parse_mode="Markdown")
         for ld in results[:8]:
-            ct = str(ld.get("call_time", ""))
-            t  = ""
-            try:
-                t = f"\n📅 {datetime.strptime(ct[:19], '%Y-%m-%dT%H:%M:%S').strftime('%d/%m/%Y %H:%M')}"
-            except Exception:
-                pass
+            dt = _parse_dt(str(ld.get("call_time", "")))
+            t  = f"\n📅 {dt.strftime('%d/%m/%Y %H:%M')}" if dt else ""
             kb = InlineKeyboardMarkup([[
                 InlineKeyboardButton("✏️ עריכה",       callback_data=f"edit_{ld['id']}"),
                 InlineKeyboardButton("📋 עדכן סטטוס",  callback_data=f"out_{ld['id']}_snooze"),
@@ -843,12 +841,8 @@ async def callback_handler(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
         ld  = db_get_lead(lid)
         if not ld:
             await q.edit_message_text("❌ ליד לא נמצא"); return
-        ct = str(ld.get("call_time", ""))
-        t  = ""
-        try:
-            t = datetime.strptime(ct[:19], "%Y-%m-%dT%H:%M:%S").strftime("%d/%m/%Y %H:%M")
-        except Exception:
-            pass
+        dt = _parse_dt(str(ld.get("call_time", "")))
+        t  = dt.strftime("%d/%m/%Y %H:%M") if dt else "—"
         await q.edit_message_text(
             f"✏️ *עריכת ליד*\n\n👤 {ld['name']}\n📱 {ld.get('phone', '—')}\n📅 {t}\n\n*מה לשנות?*",
             reply_markup=edit_field_kb(lid), parse_mode="Markdown")
@@ -928,13 +922,16 @@ async def callback_handler(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def job_check_reminders(app):
     for ld in db_get_leads_pre_reminder():
         try:
-            dt = datetime.strptime(ld["call_time"][:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=TZ)
+            dt = _parse_dt(str(ld.get("call_time", "")))
+            time_str = dt.strftime('%H:%M') if dt else "—"
+            now = datetime.now(TZ)
+            mins_left = int((dt - now).total_seconds() / 60) if dt else 20
             await app.bot.send_message(
                 chat_id=OWNER_CHAT_ID,
-                text=f"⏰ *שיחה בעוד ~20 דקות!*\n\n"
+                text=f"⏰ *שיחה בעוד {mins_left} דקות!*\n\n"
                      f"👤 *{ld['name']}*\n"
                      f"📱 {ld.get('phone', '—')}\n"
-                     f"🕐 שיחה בשעה *{dt.strftime('%H:%M')}*",
+                     f"🕐 שיחה בשעה *{time_str}*",
                 parse_mode="Markdown")
             db_update_lead(ld["id"], status=ST_PRE_REMINDED)
         except Exception as e:
@@ -969,12 +966,8 @@ async def job_morning_briefing(app):
         lines.append(f"📋 *שיחות ותזכורות ({len(active)}):*")
         for ld in active[:10]:
             ct = str(ld.get("call_time") or ld.get("follow_up_time") or "")
-            t  = ""
-            if ct:
-                try:
-                    t = f" ⏰{datetime.strptime(ct[:19], '%Y-%m-%dT%H:%M:%S').strftime('%H:%M')}"
-                except Exception:
-                    pass
+            dt = _parse_dt(ct) if ct else None
+            t  = f" ⏰{dt.strftime('%H:%M')}" if dt else ""
             lines.append(f"{STATUS_EMOJI.get(ld.get('status'), '❓')} *{ld['name']}*{t}")
     if old:
         lines.append(f"\n📁 *{len(old)} לידים ישנים*")
