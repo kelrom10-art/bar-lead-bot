@@ -800,7 +800,7 @@ function launchApp(user) {
     document.getElementById(id).classList.remove('active'));
   document.getElementById('app').classList.add('active');
   goTo('today', document.querySelector('.nav-btn'));
-  requestNotifPermission();
+  setupPush();
 }
 
 async function initApp() {
@@ -826,9 +826,46 @@ async function initLoginScreen() {
   } catch(e){}
 }
 
-async function requestNotifPermission() {
-  if ('Notification' in window && Notification.permission==='default') {
-    Notification.requestPermission();
+// ── Web Push ───────────────────────────────────────────────────────────────
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - base64String.length % 4) % 4);
+  const base64  = (base64String + padding).replace(/-/g,'+').replace(/_/g,'/');
+  const raw     = atob(base64);
+  return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
+}
+
+async function setupPush() {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+  try {
+    // Register service worker
+    const reg = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+    await navigator.serviceWorker.ready;
+
+    // Ask permission
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') return;
+
+    // Get VAPID public key from server
+    const token = localStorage.getItem('auth_token');
+    if (!token) return;
+    const vapidRes = await fetch('/api/push/vapid-key');
+    const { publicKey } = await vapidRes.json();
+    if (!publicKey) return;
+
+    // Subscribe
+    const sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(publicKey)
+    });
+
+    // Send subscription to server
+    await fetch('/api/push/subscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ subscription: sub.toJSON() })
+    });
+  } catch(e) {
+    console.warn('Push setup failed:', e);
   }
 }
 

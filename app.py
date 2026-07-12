@@ -19,7 +19,7 @@ Optional environment variables:
   OPEN_REGISTRATION — Allow public self-registration (default: true)
 """
 
-import asyncio, csv, hashlib, hmac as _hmac, io, json, logging, os
+import asyncio, base64, csv, hashlib, hmac as _hmac, io, json, logging, os
 import secrets, smtplib, threading, uuid
 from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timedelta
@@ -28,6 +28,14 @@ from email.mime.multipart import MIMEMultipart
 from typing import Optional
 from zoneinfo import ZoneInfo
 import urllib.request as _ureq
+
+try:
+    from pywebpush import webpush as _webpush, WebPushException
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives import serialization
+    WEBPUSH_AVAILABLE = True
+except ImportError:
+    WEBPUSH_AVAILABLE = False
 
 import psycopg2
 import psycopg2.extras
@@ -212,6 +220,13 @@ def ensure_db():
                 created_at   TEXT
             )
         """)
+        # App settings (VAPID keys, etc.)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        """)
     logger.info("DB ✓")
 
 # ── Auth helpers ──────────────────────────────────────────────────────────────
@@ -351,6 +366,124 @@ def db_update_password(user_id: str, new_password: str):
         )
 
 # ── Push subscriptions ────────────────────────────────────────────────────────
+def db_get_setting(key: str) -> Optional[str]:
+    with _db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT value FROM settings WHERE key=%s", (key,))
+        row = cur.fetchone()
+    return row[0] if row else None
+
+def db_set_setting(key: str, value: str):
+    with _db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO settings(key,value) VALUES(%s,%s) "
+            "ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value",
+            (key, value)
+        )
+
+# ── VAPID / Web Push ──────────────────────────────────────────────────────────
+
+_vapid_priv: Optional[str] = None
+_vapid_pub:  Optional[str] = None
+
+def _generate_vapid_keys():
+    priv = ec.generate_private_key(ec.SECP256R1())
+    priv_pem = priv.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption()
+    ).decode()
+    pub_bytes = priv.public_key().public_bytes(
+        serialization.Encoding.X962,
+        serialization.PublicFormat.UncompressedPoint
+    )
+    pub_b64 = base64.urlsafe_b64encode(pub_bytes).rstrip(b'=').decode()
+    return priv_pem, pub_b64
+
+def get_vapid_keys() -> tuple:
+    global _vapid_priv, _vapid_pub
+    if _vapid_priv and _vapid_pub:
+        return _vapid_priv, _vapid_pub
+    # Env vars first
+    p = os.getenv("VAPID_PRIVATE_KEY", "")
+    q = os.getenv("VAPID_PUBLIC_KEY", "")
+    if p and q:
+        _vapid_priv, _vapid_pub = p, q
+        return p, q
+    # DB
+    p = db_get_setting("vapid_private_key") or ""
+    q = db_get_setting("vapid_public_key") or ""
+    if p and q:
+        _vapid_priv, _vapid_pub = p, q
+        return p, q
+    # Generate
+    if not WEBPUSH_AVAILABLE:
+        return "", ""
+    p, q = _generate_vapid_keys()
+    db_set_setting("vapid_private_key", p)
+    db_set_setting("vapid_public_key", q)
+    _vapid_priv, _vapid_pub = p, q
+    logger.info(f"VAPID keys generated. Public: {q}")
+    return p, q
+
+def db_get_push_subscriptions_for_user(user_id: str) -> list:
+    with _db() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT * FROM push_subscriptions WHERE user_id=%s", (user_id,))
+        return [dict(r) for r in cur.fetchall()]
+
+def db_get_all_push_subscriptions() -> list:
+    with _db() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT * FROM push_subscriptions")
+        return [dict(r) for r in cur.fetchall()]
+
+def db_delete_push_subscription(sub_id: str):
+    with _db() as conn:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM push_subscriptions WHERE id=%s", (sub_id,))
+
+def _send_push_one(sub_record: dict, title: str, body: str, url: str = "/") -> bool:
+    if not WEBPUSH_AVAILABLE:
+        return False
+    try:
+        priv, pub = get_vapid_keys()
+        if not priv:
+            return False
+        sub_info = json.loads(sub_record["subscription"])
+        _webpush(
+            subscription_info=sub_info,
+            data=json.dumps({"title": title, "body": body, "url": url}),
+            vapid_private_key=priv,
+            vapid_claims={"sub": "mailto:admin@bar-lead-bot.onrender.com"},
+        )
+        return True
+    except WebPushException as ex:
+        resp = getattr(ex, "response", None)
+        if resp and resp.status_code in (404, 410):
+            db_delete_push_subscription(sub_record["id"])
+        else:
+            logger.error(f"WebPushException: {ex}")
+        return False
+    except Exception as e:
+        logger.error(f"push error: {e}")
+        return False
+
+def push_to_user(user_id: str, title: str, body: str, url: str = "/"):
+    if not WEBPUSH_AVAILABLE:
+        return
+    for sub in db_get_push_subscriptions_for_user(user_id):
+        _send_push_one(sub, title, body, url)
+
+def push_to_all(title: str, body: str, url: str = "/"):
+    if not WEBPUSH_AVAILABLE:
+        return
+    for sub in db_get_all_push_subscriptions():
+        _send_push_one(sub, title, body, url)
+
+# ─────────────────────────────────────────────────────────────────────────────
+
 def db_save_push_subscription(user_id: str, subscription_json: str):
     sub_id = str(uuid.uuid4())[:8]
     with _db() as conn:
@@ -1131,10 +1264,11 @@ async def callback_handler(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def job_check_reminders(app):
     for ld in db_get_leads_pre_reminder():
         try:
-            dt       = _parse_dt(str(ld.get("call_time", "")))
-            time_str = dt.strftime('%H:%M') if dt else "—"
-            now      = datetime.now(TZ)
+            dt        = _parse_dt(str(ld.get("call_time", "")))
+            time_str  = dt.strftime('%H:%M') if dt else "—"
+            now       = datetime.now(TZ)
             mins_left = int((dt - now).total_seconds() / 60) if dt else 20
+            # Telegram
             await app.bot.send_message(
                 chat_id=OWNER_CHAT_ID,
                 text=f"⏰ *שיחה בעוד {mins_left} דקות!*\n\n"
@@ -1142,6 +1276,12 @@ async def job_check_reminders(app):
                      f"📱 {ld.get('phone', '—')}\n"
                      f"🕐 שיחה בשעה *{time_str}*",
                 parse_mode="Markdown")
+            # Web Push
+            uid = ld.get("user_id") or db_get_first_user_id()
+            if uid:
+                push_to_user(uid,
+                    f"⏰ שיחה בעוד {mins_left} דקות",
+                    f"{ld['name']} · {ld.get('phone','—')} בשעה {time_str}")
             db_update_lead(ld["id"], status=ST_PRE_REMINDED)
         except Exception as e:
             logger.error(f"pre_reminder [{ld.get('id')}]: {e}")
@@ -1181,6 +1321,11 @@ async def job_morning_briefing(app):
     if old:
         lines.append(f"\n📁 *{len(old)} לידים ישנים*")
     await app.bot.send_message(chat_id=OWNER_CHAT_ID, text="\n".join(lines), parse_mode="Markdown")
+    # Web Push briefing
+    push_body = f"{len(active)} שיחות היום" if active else "אין שיחות היום"
+    if old:
+        push_body += f" · {len(old)} ישנים"
+    push_to_all("☀️ בוקר טוב!", push_body)
 
 async def job_weekly_report(app):
     s    = db_stats_since((datetime.now(TZ) - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%S"))
@@ -1219,6 +1364,8 @@ async def job_stale_leads(app):
         chat_id=OWNER_CHAT_ID,
         text="\n".join(lines) + "\n\nפתח את האפליקציה לעדכון סטטוס 👆",
         parse_mode="Markdown")
+    # Web Push
+    push_to_all("🔔 לידים ממתינים", f"{len(stale)} לידים ללא עדכון 3+ ימים")
 
 def run_bot_thread():
     loop = asyncio.new_event_loop()
@@ -1278,6 +1425,8 @@ def run_bot_thread():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     ensure_db()
+    if WEBPUSH_AVAILABLE:
+        get_vapid_keys()  # generate and cache VAPID keys on startup
     t = threading.Thread(target=run_bot_thread, daemon=True, name="telegram-bot")
     t.start()
     logger.info("🍸 Bar Lead Manager v4.0 started")
@@ -1416,13 +1565,10 @@ def get_me(user: dict = Depends(get_current_user)):
 def forgot_password(body: ForgotPasswordRequest):
     user = db_get_user_by_username(body.username.strip())
     if not user:
-        # Don't reveal whether the user exists
         return {"message": "אם המשתמש קיים, נוצר קוד איפוס"}
     code = db_create_reset_token(user["id"])
-    # If SMTP not configured, return code directly (dev/setup mode)
     if not SMTP_HOST:
         return {"message": "קוד איפוס נוצר", "code": code}
-    # TODO: send email if user has email field stored
     return {"message": "קוד איפוס נוצר", "code": code}
 
 @fastapi_app.post("/api/auth/reset-password")
@@ -1431,13 +1577,63 @@ def reset_password(body: ResetPasswordRequest):
     if not uid:
         raise HTTPException(400, "קוד לא תקין או שפג תוקפו")
     db_update_password(uid, body.new_password)
-    # Invalidate all active sessions
     with _db() as conn:
         cur = conn.cursor()
         cur.execute("DELETE FROM sessions WHERE user_id=%s", (uid,))
     return {"message": "סיסמה אופסה בהצלחה — התחבר מחדש"}
 
-# ── Push notifications route ──────────────────────────────────────────────────
+# ── Service Worker ─────────────────────────────────────────────────────────────
+
+_SW_JS = r"""
+self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('activate', e => e.waitUntil(clients.claim()));
+
+self.addEventListener('push', function(event) {
+  var data = {};
+  try { data = event.data.json(); } catch(e) {}
+  var title = data.title || 'Bar Lead Manager';
+  var opts = {
+    body:      data.body || '',
+    icon:      '/icon-192.png',
+    badge:     '/icon-192.png',
+    data:      { url: data.url || '/' },
+    vibrate:   [200, 100, 200],
+    tag:       'blm-notification',
+    renotify:  true,
+    requireInteraction: false
+  };
+  event.waitUntil(self.registration.showNotification(title, opts));
+});
+
+self.addEventListener('notificationclick', function(event) {
+  event.notification.close();
+  var url = (event.notification.data && event.notification.data.url) || '/';
+  event.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function(list) {
+      for (var i = 0; i < list.length; i++) {
+        if ('focus' in list[i]) return list[i].focus();
+      }
+      if (clients.openWindow) return clients.openWindow(url);
+    })
+  );
+});
+"""
+
+@fastapi_app.get("/sw.js")
+def serve_sw():
+    from fastapi.responses import Response
+    return Response(
+        content=_SW_JS,
+        media_type="application/javascript",
+        headers={"Service-Worker-Allowed": "/", "Cache-Control": "no-cache"}
+    )
+
+# ── Push notification routes ──────────────────────────────────────────────────
+
+@fastapi_app.get("/api/push/vapid-key")
+def get_vapid_public_key():
+    _, pub = get_vapid_keys()
+    return {"publicKey": pub}
 
 @fastapi_app.post("/api/push/subscribe")
 def push_subscribe(body: PushSubscribeRequest, user: dict = Depends(get_current_user)):
@@ -1492,7 +1688,7 @@ def get_leads(
         with _db() as conn:
             cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
             cur.execute(
-                f"SELECT * FROM leads WHERE status IN ({placeholders}) AND user_id=%s ORDER BY call_time",
+                "SELECT * FROM leads WHERE status IN (" + placeholders + ") AND user_id=%s ORDER BY call_time",
                 statuses + [uid]
             )
             rows = [dict(r) for r in cur.fetchall()]
@@ -1527,13 +1723,13 @@ def create_lead(body: LeadCreate, user: dict = Depends(get_current_user)):
         source=body.source or "", package=body.package or "",
         user_id=user["id"]
     )
-    msg = f"🆕 <b>ליד חדש!</b>\n👤 {body.name}\n📱 {body.phone}\n➕ נוסף ע״י {created_by}"
+    msg = "<b>ליד חדש!</b>\n" + body.name + "\n" + body.phone + "\nנוסף ע׳׳י " + created_by
     if body.call_time:
-        msg += f"\n📅 {body.call_time}"
+        msg += "\n" + body.call_time
     if body.source:
-        msg += f"\n📣 {SOURCE_HEB.get(body.source, body.source)}"
+        msg += "\n" + SOURCE_HEB.get(body.source, body.source)
     if body.notes:
-        msg += f"\n📝 {body.notes}"
+        msg += "\n" + body.notes
     _send_tg(msg)
     return {"id": lid, "message": "Lead created"}
 
@@ -1558,7 +1754,7 @@ async def import_leads_csv(
             name  = (row.get("name") or row.get("שם") or "").strip()
             phone = (row.get("phone") or row.get("טלפון") or "").strip()
             if not name or not phone:
-                errors.append(f"שורה {i+1}: חסר שם או טלפון")
+                errors.append("row " + str(i+1) + ": missing name/phone")
                 continue
             notes     = (row.get("notes") or row.get("הערות") or "").strip()
             tags      = (row.get("tags") or row.get("תגיות") or "").strip()
@@ -1571,7 +1767,7 @@ async def import_leads_csv(
             )
             imported += 1
         except Exception as e:
-            errors.append(f"שורה {i+1}: {str(e)[:60]}")
+            errors.append("row " + str(i+1) + ": " + str(e)[:60])
 
     return {"imported": imported, "errors": errors[:20]}
 
@@ -1611,182 +1807,98 @@ def get_stats(user: dict = Depends(get_current_user)):
     with _db() as conn:
         cur = conn.cursor()
         cur.execute("SELECT COUNT(*) FROM leads WHERE user_id=%s", (uid,))
-        all_total = cur.fetchone()[0]
+        total = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM leads WHERE user_id=%s AND status='won'", (uid,))
+        won_total = cur.fetchone()[0]
+        cur.execute("SELECT COALESCE(SUM(sale_amount),0) FROM leads WHERE user_id=%s AND status='won'", (uid,))
+        rev_total = float(cur.fetchone()[0])
+
+    weekly  = db_stats_since(week_ago,  uid)
+    monthly = db_stats_since(month_ago, uid)
+
+    with _db() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute(
-            "SELECT COUNT(*) FROM leads WHERE status IN (%s,%s,%s,%s) AND user_id=%s",
-            (ST_NEW, ST_PRE_REMINDED, ST_CALLED, ST_FOLLOW_UP, uid)
+            "SELECT source, COUNT(*) AS cnt FROM leads WHERE user_id=%s AND source != '' GROUP BY source ORDER BY cnt DESC",
+            (uid,)
         )
-        all_active = cur.fetchone()[0]
-        cur.execute("SELECT COUNT(*) FROM leads WHERE status=%s AND user_id=%s", (ST_OLD, uid))
-        all_old = cur.fetchone()[0]
-
-        status_counts = {}
-        for s in [ST_NEW, ST_PRE_REMINDED, ST_CALLED, ST_WON, ST_LOST, ST_FOLLOW_UP, ST_OLD]:
-            cur.execute("SELECT COUNT(*) FROM leads WHERE status=%s AND user_id=%s", (s, uid))
-            status_counts[s] = cur.fetchone()[0]
-
-        cur.execute(
-            "SELECT created_at, updated_at FROM leads WHERE status=%s AND user_id=%s", (ST_WON, uid)
-        )
-        won_rows = cur.fetchall()
-
-        cur.execute(
-            "SELECT AVG(sale_amount) FROM leads WHERE status=%s AND sale_amount > 0 AND user_id=%s",
-            (ST_WON, uid)
-        )
-        avg_sale_row = cur.fetchone()
-        avg_sale     = round(avg_sale_row[0] or 0, 0)
-
-        daily = []
-        for i in range(6, -1, -1):
-            day    = now - timedelta(days=i)
-            prefix = day.strftime("%Y-%m-%d")
-            cur.execute(
-                "SELECT COUNT(*) FROM leads WHERE created_at LIKE %s AND user_id=%s",
-                (f"{prefix}%", uid)
-            )
-            daily.append({"date": prefix, "label": day.strftime("%d/%m"), "count": cur.fetchone()[0]})
-
-    source_counts = db_source_counts(uid)
-
-    if won_rows:
-        days_list = []
-        for r in won_rows:
-            try:
-                c = datetime.strptime(str(r[0])[:19], "%Y-%m-%dT%H:%M:%S")
-                u_dt = datetime.strptime(str(r[1])[:19], "%Y-%m-%dT%H:%M:%S")
-                days_list.append((u_dt - c).total_seconds() / 86400)
-            except Exception:
-                pass
-        avg_days = round(sum(days_list) / len(days_list), 1) if days_list else 0
-    else:
-        avg_days = 0
+        source_rows = [dict(r) for r in cur.fetchall()]
 
     return {
-        "weekly":            db_stats_since(week_ago, uid),
-        "monthly":           db_stats_since(month_ago, uid),
-        "total":             all_total,
-        "active":            all_active,
-        "old":               all_old,
-        "status_counts":     status_counts,
-        "source_counts":     source_counts,
-        "avg_days_to_close": avg_days,
-        "avg_sale":          avg_sale,
-        "daily":             daily,
+        "total":        total,
+        "won_total":    won_total,
+        "rev_total":    rev_total,
+        "weekly":       weekly,
+        "monthly":      monthly,
+        "source_counts": {r["source"]: r["cnt"] for r in source_rows},
     }
 
-# ── Export ────────────────────────────────────────────────────────────────────
-
-@fastapi_app.get("/api/export")
+@fastapi_app.get("/api/export/excel")
 def export_excel(user: dict = Depends(get_current_user)):
-    buf   = build_excel(user["id"])
-    fname = f"leads_{datetime.now(TZ).strftime('%d%m%Y_%H%M')}.xlsx"
+    uid = user["id"] if not user.get("is_admin") else None
+    buf = build_excel(uid)
     return StreamingResponse(
         buf,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f"attachment; filename={fname}"}
+        headers={"Content-Disposition": "attachment; filename=leads.xlsx"}
     )
 
-# ── Admin routes ──────────────────────────────────────────────────────────────
+# ── Admin Routes ──────────────────────────────────────────────────────────────
 
 @fastapi_app.get("/api/admin/users")
-def admin_list_users(user: dict = Depends(require_admin)):
-    return db_list_users()
+def admin_list_users(admin: dict = Depends(require_admin)):
+    with _db() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT id, username, display_name, created_at, is_admin FROM users ORDER BY created_at")
+        users = [dict(r) for r in cur.fetchall()]
+    # add lead count per user
+    for u in users:
+        with _db() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM leads WHERE user_id=%s", (u["id"],))
+            u["lead_count"] = cur.fetchone()[0]
+    return users
 
 @fastapi_app.get("/api/admin/stats")
-def admin_global_stats(user: dict = Depends(require_admin)):
+def admin_stats(admin: dict = Depends(require_admin)):
     with _db() as conn:
         cur = conn.cursor()
-        cur.execute("SELECT COUNT(*) FROM users")
-        total_users = cur.fetchone()[0]
         cur.execute("SELECT COUNT(*) FROM leads")
         total_leads = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM users")
+        total_users = cur.fetchone()[0]
         cur.execute("SELECT COALESCE(SUM(sale_amount),0) FROM leads WHERE status='won'")
-        total_revenue = cur.fetchone()[0]
-        cur.execute("SELECT COUNT(*) FROM sessions WHERE expires_at > %s", (_now(),))
-        active_sessions = cur.fetchone()[0]
+        total_revenue = float(cur.fetchone()[0])
     return {
-        "total_users":      total_users,
-        "total_leads":      total_leads,
-        "total_revenue":    float(total_revenue),
-        "active_sessions":  active_sessions,
+        "total_leads":   total_leads,
+        "total_users":   total_users,
+        "total_revenue": total_revenue,
     }
 
 @fastapi_app.delete("/api/admin/users/{uid}")
-def admin_delete_user(uid: str, user: dict = Depends(require_admin)):
-    if uid == user["id"]:
+def admin_delete_user(uid: str, admin: dict = Depends(require_admin)):
+    if uid == admin["id"]:
         raise HTTPException(400, "לא ניתן למחוק את עצמך")
     with _db() as conn:
         cur = conn.cursor()
         cur.execute("DELETE FROM sessions WHERE user_id=%s", (uid,))
+        cur.execute("DELETE FROM push_subscriptions WHERE user_id=%s", (uid,))
+        cur.execute("DELETE FROM leads WHERE user_id=%s", (uid,))
         cur.execute("DELETE FROM users WHERE id=%s", (uid,))
-    return {"ok": True}
+    return {"message": "User deleted"}
 
-# ── Misc ──────────────────────────────────────────────────────────────────────
-
-@fastapi_app.get("/api/test-telegram")
-def test_telegram(user: dict = Depends(get_current_user)):
-    if not BOT_TOKEN:
-        return {"ok": False, "error": "BOT_TOKEN לא הוגדר"}
-    if not OWNER_CHAT_ID:
-        return {"ok": False, "error": "OWNER_CHAT_ID לא הוגדר"}
-    try:
-        req = _ureq.Request(f"https://api.telegram.org/bot{BOT_TOKEN}/getMe")
-        res = json.loads(_ureq.urlopen(req, timeout=5).read())
-        if res.get("ok"):
-            bot = res["result"]
-            return {"ok": True, "bot_name": bot["first_name"],
-                    "bot_username": bot["username"],
-                    "message": f"✅ הבוט @{bot['username']} מחובר!"}
-        return {"ok": False, "error": str(res)}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
-
-# ── Static files ──────────────────────────────────────────────────────────────
-
-@fastapi_app.get("/sw.js")
-def serve_sw():
-    p = os.path.join(STATIC_DIR, "sw.js")
-    if os.path.exists(p):
-        return FileResponse(p, media_type="application/javascript")
-    return HTMLResponse("// no sw", 200)
-
-@fastapi_app.get("/manifest.json")
-def serve_manifest():
-    p = os.path.join(STATIC_DIR, "manifest.json")
-    if os.path.exists(p):
-        return FileResponse(p, media_type="application/json")
-    raise HTTPException(404)
+# ── Serve index.html ──────────────────────────────────────────────────────────
 
 @fastapi_app.get("/", response_class=HTMLResponse)
-def serve_app():
-    html_path = os.path.join(STATIC_DIR, "index.html")
-    if os.path.exists(html_path):
-        with open(html_path, encoding="utf-8") as f:
+@fastapi_app.get("/{path:path}", response_class=HTMLResponse)
+def serve_index(path: str = ""):
+    index_path = os.path.join(STATIC_DIR, "index.html")
+    if os.path.exists(index_path):
+        with open(index_path, "r", encoding="utf-8") as f:
             return HTMLResponse(f.read())
-    return HTMLResponse("<h1>index.html not found</h1>", 404)
+    return HTMLResponse("<h1>index.html not found</h1>", status_code=404)
 
-# ── Telegram helper ───────────────────────────────────────────────────────────
-
-def _send_tg(text: str):
-    if not BOT_TOKEN or not OWNER_CHAT_ID:
-        return
-    def _do():
-        try:
-            payload = json.dumps({
-                "chat_id": OWNER_CHAT_ID, "text": text, "parse_mode": "HTML"
-            }).encode()
-            req = _ureq.Request(
-                f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-                data=payload, headers={"Content-Type": "application/json"}
-            )
-            _ureq.urlopen(req, timeout=6)
-        except Exception:
-            pass
-    threading.Thread(target=_do, daemon=True).start()
-
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    print(f"🍸 Bar Lead Manager v4.0 — http://0.0.0.0:{PORT}")
-    uvicorn.run(fastapi_app, host="0.0.0.0", port=PORT)
+    uvicorn.run("app:fastapi_app", host="0.0.0.0", port=PORT, reload=False)
