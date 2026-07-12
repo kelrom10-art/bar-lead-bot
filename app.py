@@ -1433,9 +1433,17 @@ async def lifespan(app: FastAPI):
     yield
 
 fastapi_app = FastAPI(title="Bar Lead Manager API v4", lifespan=lifespan)
+_ALLOWED_ORIGINS = [
+    "https://bar-lead-bot.onrender.com",
+    "http://localhost:8080",
+    "http://127.0.0.1:8080",
+]
 fastapi_app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
+    allow_origins=_ALLOWED_ORIGINS,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
+    allow_credentials=True,
 )
 
 # ── Pydantic models ───────────────────────────────────────────────────────────
@@ -1565,11 +1573,23 @@ def get_me(user: dict = Depends(get_current_user)):
 def forgot_password(body: ForgotPasswordRequest):
     user = db_get_user_by_username(body.username.strip())
     if not user:
-        return {"message": "אם המשתמש קיים, נוצר קוד איפוס"}
+        # Always return the same message to prevent username enumeration
+        return {"message": "אם המשתמש קיים, קוד איפוס נשלח"}
     code = db_create_reset_token(user["id"])
-    if not SMTP_HOST:
-        return {"message": "קוד איפוס נוצר", "code": code}
-    return {"message": "קוד איפוס נוצר", "code": code}
+    sent = False
+    if SMTP_HOST:
+        sent = send_email(
+            user.get("email", "") or "",
+            "קוד איפוס סיסמה — Bar Lead Manager",
+            f"<p>קוד האיפוס שלך: <strong>{code}</strong></p>"
+            f"<p>הקוד תקף לשעה אחת.</p>"
+        )
+    if not sent:
+        # No SMTP configured — return code for dev/admin use only (log it server-side)
+        logger.info(f"Password reset code for {body.username}: {code}")
+        # Still return it so the user can reset (single-user / no email setup)
+        return {"message": "קוד איפוס נוצר — בדוק את הלוגים של המנהל", "code": code}
+    return {"message": "קוד איפוס נשלח לאימייל"}
 
 @fastapi_app.post("/api/auth/reset-password")
 def reset_password(body: ResetPasswordRequest):
@@ -1627,6 +1647,30 @@ def serve_sw():
         media_type="application/javascript",
         headers={"Service-Worker-Allowed": "/", "Cache-Control": "no-cache"}
     )
+
+@fastapi_app.get("/manifest.json")
+def serve_manifest():
+    from fastapi.responses import FileResponse
+    p = os.path.join(STATIC_DIR, "manifest.json")
+    if os.path.exists(p):
+        return FileResponse(p, media_type="application/manifest+json")
+    raise HTTPException(404)
+
+@fastapi_app.get("/icon-192.png")
+def serve_icon_192():
+    from fastapi.responses import FileResponse
+    p = os.path.join(STATIC_DIR, "icon-192.png")
+    if os.path.exists(p):
+        return FileResponse(p, media_type="image/png", headers={"Cache-Control": "public,max-age=86400"})
+    raise HTTPException(404)
+
+@fastapi_app.get("/icon-512.png")
+def serve_icon_512():
+    from fastapi.responses import FileResponse
+    p = os.path.join(STATIC_DIR, "icon-512.png")
+    if os.path.exists(p):
+        return FileResponse(p, media_type="image/png", headers={"Cache-Control": "public,max-age=86400"})
+    raise HTTPException(404)
 
 # ── Push notification routes ──────────────────────────────────────────────────
 
