@@ -482,6 +482,26 @@ def push_to_all(title: str, body: str, url: str = "/"):
     for sub in db_get_all_push_subscriptions():
         _send_push_one(sub, title, body, url)
 
+def _send_tg(html_msg: str) -> None:
+    """Synchronous fire-and-forget Telegram notification (never raises)."""
+    if not BOT_TOKEN or not OWNER_CHAT_ID:
+        return
+    try:
+        payload = json.dumps({
+            "chat_id": OWNER_CHAT_ID,
+            "text":    html_msg,
+            "parse_mode": "HTML",
+        }).encode()
+        req = _ureq.Request(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        _ureq.urlopen(req, timeout=5)
+    except Exception as e:
+        logger.warning(f"_send_tg failed (non-critical): {e}")
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 def db_save_push_subscription(user_id: str, subscription_json: str):
@@ -640,6 +660,8 @@ def db_delete_lead(lid: str):
         cur.execute("DELETE FROM leads WHERE id=%s", (lid,))
 
 def db_get_leads_pre_reminder() -> list:
+    """Return leads that need a reminder now.
+    Window: call_time is between 30 min PAST and 20 min FUTURE (catches missed reminders if server was sleeping)."""
     now = datetime.now(TZ)
     out = []
     with _db() as conn:
@@ -651,7 +673,8 @@ def db_get_leads_pre_reminder() -> list:
         if dt is None:
             continue
         diff = (dt - now).total_seconds() / 60
-        if 0 <= diff <= 20:
+        # -30 catches cases where the server was asleep and woke up after the call time
+        if -30 <= diff <= 20:
             out.append(dict(r))
     return out
 
@@ -1267,21 +1290,33 @@ async def job_check_reminders(app):
             dt        = _parse_dt(str(ld.get("call_time", "")))
             time_str  = dt.strftime('%H:%M') if dt else "—"
             now       = datetime.now(TZ)
-            mins_left = int((dt - now).total_seconds() / 60) if dt else 20
+            mins_diff = int((dt - now).total_seconds() / 60) if dt else 20
+            missed    = mins_diff < 0  # server was sleeping and we woke up late
+
+            if missed:
+                mins_ago = abs(mins_diff)
+                tg_text  = (f"🚨 *תזכורת שפוספסה!*\n\n"
+                            f"השרת היה כבוי — שיחה עם *{ld['name']}* הייתה לפני {mins_ago} דקות!\n"
+                            f"📱 {ld.get('phone', '—')}\n🕐 שעה {time_str}")
+                push_title = "🚨 תזכורת שפוספסה!"
+                push_body  = f"{ld['name']} · שיחה הייתה בשעה {time_str}"
+            else:
+                tg_text  = (f"⏰ *שיחה בעוד {mins_diff} דקות!*\n\n"
+                            f"👤 *{ld['name']}*\n"
+                            f"📱 {ld.get('phone', '—')}\n"
+                            f"🕐 שיחה בשעה *{time_str}*")
+                push_title = f"⏰ שיחה בעוד {mins_diff} דקות"
+                push_body  = f"{ld['name']} · {ld.get('phone','—')} בשעה {time_str}"
+
             # Telegram
             await app.bot.send_message(
                 chat_id=OWNER_CHAT_ID,
-                text=f"⏰ *שיחה בעוד {mins_left} דקות!*\n\n"
-                     f"👤 *{ld['name']}*\n"
-                     f"📱 {ld.get('phone', '—')}\n"
-                     f"🕐 שיחה בשעה *{time_str}*",
+                text=tg_text,
                 parse_mode="Markdown")
             # Web Push
             uid = ld.get("user_id") or db_get_first_user_id()
             if uid:
-                push_to_user(uid,
-                    f"⏰ שיחה בעוד {mins_left} דקות",
-                    f"{ld['name']} · {ld.get('phone','—')} בשעה {time_str}")
+                push_to_user(uid, push_title, push_body)
             db_update_lead(ld["id"], status=ST_PRE_REMINDED)
         except Exception as e:
             logger.error(f"pre_reminder [{ld.get('id')}]: {e}")
@@ -1930,6 +1965,23 @@ def admin_delete_user(uid: str, admin: dict = Depends(require_admin)):
         cur.execute("DELETE FROM leads WHERE user_id=%s", (uid,))
         cur.execute("DELETE FROM users WHERE id=%s", (uid,))
     return {"message": "User deleted"}
+
+# ── Serve index.html ──────────────────────────────────────────────────────────
+
+@fastapi_app.get("/", response_class=HTMLResponse)
+@fastapi_app.get("/{path:path}", response_class=HTMLResponse)
+def serve_index(path: str = ""):
+    index_path = os.path.join(STATIC_DIR, "index.html")
+    if os.path.exists(index_path):
+        with open(index_path, "r", encoding="utf-8") as f:
+            return HTMLResponse(f.read())
+    return HTMLResponse("<h1>index.html not found</h1>", status_code=404)
+
+# ── Entry point ───────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    uvicorn.run("app:fastapi_app", host="0.0.0.0", port=PORT, reload=False)
+message": "User deleted"}
 
 # ── Serve index.html ──────────────────────────────────────────────────────────
 

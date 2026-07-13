@@ -7,6 +7,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app.py .
 COPY index.html .
+COPY manifest.json .
+COPY icon-192.png .
+COPY icon-512.png .
 
 ENV PORT=8080
 EXPOSE 8080
