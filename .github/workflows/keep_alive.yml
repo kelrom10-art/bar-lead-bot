@@ -1,8 +1,8 @@
-name: Keep Alive
+name: Keep Render Alive
 
 on:
   schedule:
-    - cron: '*/10 * * * *'
+    - cron: '*/5 * * * *'
   workflow_dispatch:
 
 jobs:
@@ -11,4 +11,12 @@ jobs:
     steps:
       - name: Ping Render service
         run: |
-          curl -f https://bar-lead-bot.onrender.com || echo "Service waking up..."
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 https://bar-lead-bot.onrender.com/health)
+          echo "HTTP status: $STATUS"
+          if [ "$STATUS" = "200" ]; then
+            echo "Bot is alive"
+          else
+            echo "Bot returned $STATUS - retrying..."
+            sleep 15
+            curl -s -o /dev/null --max-time 30 https://bar-lead-bot.onrender.com/health
+          fi
