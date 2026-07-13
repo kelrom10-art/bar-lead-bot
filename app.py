@@ -1339,6 +1339,19 @@ async def job_check_reminders(app):
         except Exception as e:
             logger.error(f"followup_due [{ld.get('id')}]: {e}")
 
+def job_self_ping():
+    """Ping own /health every 4 min to keep Render Free tier awake.
+    Runs inside APScheduler so it works even when GitHub Actions is delayed."""
+    if not APP_URL:
+        return
+    try:
+        url = APP_URL.rstrip("/") + "/health"
+        req = _ureq.Request(url, method="GET")
+        resp = _ureq.urlopen(req, timeout=10)
+        logger.info(f"Self-ping → {resp.status}")
+    except Exception as e:
+        logger.warning(f"Self-ping failed (non-critical): {e}")
+
 async def job_morning_briefing(app):
     active = db_get_active()
     old    = db_get_old()
@@ -1422,6 +1435,7 @@ def run_bot_thread():
 
     async def post_init(application: Application) -> None:
         s = AsyncIOScheduler(timezone="Asia/Jerusalem")
+        s.add_job(job_self_ping,        "interval", minutes=4)
         s.add_job(job_check_reminders,  "interval", minutes=1,                  args=[application])
         s.add_job(job_morning_briefing, "cron",     hour=9,  minute=0,          args=[application])
         s.add_job(job_weekly_report,    "cron",     day_of_week="sun", hour=10, args=[application])
@@ -1977,7 +1991,7 @@ def serve_index(path: str = ""):
             return HTMLResponse(f.read())
     return HTMLResponse("<h1>index.html not found</h1>", status_code=404)
 
-# ── Entry point ───────────────────────────────────────────────────────────────
+# ── Entry point ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     uvicorn.run("app:fastapi_app", host="0.0.0.0", port=PORT, reload=False)
