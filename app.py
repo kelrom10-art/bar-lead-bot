@@ -1981,20 +1981,3 @@ def serve_index(path: str = ""):
 
 if __name__ == "__main__":
     uvicorn.run("app:fastapi_app", host="0.0.0.0", port=PORT, reload=False)
-message": "User deleted"}
-
-# ── Serve index.html ──────────────────────────────────────────────────────────
-
-@fastapi_app.get("/", response_class=HTMLResponse)
-@fastapi_app.get("/{path:path}", response_class=HTMLResponse)
-def serve_index(path: str = ""):
-    index_path = os.path.join(STATIC_DIR, "index.html")
-    if os.path.exists(index_path):
-        with open(index_path, "r", encoding="utf-8") as f:
-            return HTMLResponse(f.read())
-    return HTMLResponse("<h1>index.html not found</h1>", status_code=404)
-
-# ── Entry point ───────────────────────────────────────────────────────────────
-
-if __name__ == "__main__":
-    uvicorn.run("app:fastapi_app", host="0.0.0.0", port=PORT, reload=False)
