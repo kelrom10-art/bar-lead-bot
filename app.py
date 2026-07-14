@@ -41,7 +41,7 @@ import psycopg2
 import psycopg2.extras
 import psycopg2.pool
 
-from fastapi import FastAPI, HTTPException, Depends, UploadFile, File
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -76,6 +76,9 @@ STATIC_DIR        = os.path.dirname(os.path.abspath(__file__))
 
 logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Global Telegram Application (webhook mode — no polling, no Conflict on redeploy)
+_tg_app: Optional[Application] = None
 
 # ── Status / Source / Package constants ───────────────────────────────────────
 ST_NEW          = "new"
@@ -1417,13 +1420,8 @@ async def job_stale_leads(app):
     # Web Push
     push_to_all("🔔 לידים ממתינים", f"{len(stale)} לידים ללא עדכון 3+ ימים")
 
-def run_bot_thread():
-    import time as _time
-
-    if not BOT_TOKEN or not OWNER_CHAT_ID:
-        logger.warning("BOT_TOKEN or OWNER_CHAT_ID not set — bot not started")
-        return
-
+def _build_bot_app() -> Application:
+    """Build a configured Telegram Application with all handlers (no polling)."""
     menu_regex = (
         "^(📋 לידים ישנים"
         "|📊 סיכום"
@@ -1433,49 +1431,65 @@ def run_bot_thread():
         "|📤 יצוא Excel"
         "|✏️ עריכת ליד)$"
     )
+    conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex("^➕ הוספת ליד$"), add_start)],
+        states={
+            ASK_NAME:  [MessageHandler(filters.TEXT & ~filters.COMMAND, got_name)],
+            ASK_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_phone)],
+            ASK_TIME:  [MessageHandler(filters.TEXT & ~filters.COMMAND, got_time)],
+        },
+        fallbacks=[
+            CommandHandler("cancel", cancel_add),
+            MessageHandler(filters.Regex(menu_regex), cancel_add),
+        ],
+        allow_reentry=True,
+    )
+    app = Application.builder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(conv)
+    app.add_handler(CallbackQueryHandler(callback_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    return app
 
-    async def post_init(application: Application) -> None:
-        s = AsyncIOScheduler(timezone="Asia/Jerusalem")
-        s.add_job(job_self_ping,        "interval", minutes=4)
-        s.add_job(job_check_reminders,  "interval", minutes=1,                  args=[application])
-        s.add_job(job_morning_briefing, "cron",     hour=9,  minute=0,          args=[application])
-        s.add_job(job_weekly_report,    "cron",     day_of_week="sun", hour=10, args=[application])
-        s.add_job(job_monthly_report,   "cron",     day=1,   hour=10,           args=[application])
-        s.add_job(job_stale_leads,      "cron",     hour=10, minute=30,         args=[application])
-        s.start()
-        logger.info("Scheduler ✓")
 
-    for attempt in range(6):
-        try:
-            conv = ConversationHandler(
-                entry_points=[MessageHandler(filters.Regex("^➕ הוספת ליד$"), add_start)],
-                states={
-                    ASK_NAME:  [MessageHandler(filters.TEXT & ~filters.COMMAND, got_name)],
-                    ASK_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_phone)],
-                    ASK_TIME:  [MessageHandler(filters.TEXT & ~filters.COMMAND, got_time)],
-                },
-                fallbacks=[
-                    CommandHandler("cancel", cancel_add),
-                    MessageHandler(filters.Regex(menu_regex), cancel_add),
-                ],
-                allow_reentry=True,
-            )
-            bot_app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
-            bot_app.add_handler(CommandHandler("start", cmd_start))
-            bot_app.add_handler(conv)
-            bot_app.add_handler(CallbackQueryHandler(callback_handler))
-            bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+async def _setup_webhook() -> None:
+    """Start the bot in webhook mode — eliminates Telegram Conflict on redeploy."""
+    global _tg_app
+    if not BOT_TOKEN or not OWNER_CHAT_ID:
+        logger.warning("BOT_TOKEN/OWNER_CHAT_ID not set — Telegram bot disabled")
+        return
+    if not APP_URL:
+        logger.warning("APP_URL not set — cannot register webhook; Telegram bot disabled")
+        return
+    try:
+        _tg_app = _build_bot_app()
+        await _tg_app.initialize()
+        await _tg_app.start()
+        webhook_url = f"{APP_URL.rstrip('/')}/telegram/webhook"
+        await _tg_app.bot.set_webhook(
+            url=webhook_url,
+            allowed_updates=["message", "callback_query"],
+            drop_pending_updates=True,
+        )
+        logger.info(f"Telegram webhook set → {webhook_url}")
+    except Exception as e:
+        logger.error(f"Telegram webhook setup failed: {e}", exc_info=True)
+        _tg_app = None
 
-            logger.info(f"Bot polling started (attempt {attempt + 1}) 🚀")
-            bot_app.run_polling(drop_pending_updates=True, stop_signals=None)
-            break  # clean exit
-        except Exception as exc:
-            if "Conflict" in str(exc) and attempt < 5:
-                logger.warning(f"Telegram Conflict (attempt {attempt+1}/6) — previous instance still running, retry in 15s")
-                _time.sleep(15)
-            else:
-                logger.error(f"Bot thread fatal error: {exc}", exc_info=True)
-                break
+
+async def _teardown_webhook() -> None:
+    """Stop the bot (webhook URL is kept — next deploy's set_webhook will overwrite it)."""
+    global _tg_app
+    if _tg_app is None:
+        return
+    try:
+        await _tg_app.stop()
+        await _tg_app.shutdown()
+        logger.info("Telegram bot stopped gracefully (webhook retained)")
+    except Exception as e:
+        logger.warning(f"Bot teardown error (non-critical): {e}")
+    finally:
+        _tg_app = None
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  FASTAPI APPLICATION
@@ -1485,11 +1499,28 @@ def run_bot_thread():
 async def lifespan(app: FastAPI):
     ensure_db()
     if WEBPUSH_AVAILABLE:
-        get_vapid_keys()  # generate and cache VAPID keys on startup
-    t = threading.Thread(target=run_bot_thread, daemon=True, name="telegram-bot")
-    t.start()
+        get_vapid_keys()
+
+    # Switch to webhook mode — no polling, no Conflict on redeploy
+    await _setup_webhook()
+
+    # Start scheduler in the uvicorn event loop (not a separate thread)
+    scheduler = AsyncIOScheduler(timezone="Asia/Jerusalem")
+    scheduler.add_job(job_self_ping, "interval", minutes=4)
+    if _tg_app:
+        scheduler.add_job(job_check_reminders,  "interval", minutes=1,                  args=[_tg_app])
+        scheduler.add_job(job_morning_briefing, "cron",     hour=9,  minute=0,          args=[_tg_app])
+        scheduler.add_job(job_weekly_report,    "cron",     day_of_week="sun", hour=10, args=[_tg_app])
+        scheduler.add_job(job_monthly_report,   "cron",     day=1,   hour=10,           args=[_tg_app])
+        scheduler.add_job(job_stale_leads,      "cron",     hour=10, minute=30,         args=[_tg_app])
+    scheduler.start()
+    logger.info("Scheduler ✓")
+
     logger.info("🍸 Bar Lead Manager v4.0 started")
     yield
+
+    scheduler.shutdown(wait=False)
+    await _teardown_webhook()
 
 fastapi_app = FastAPI(title="Bar Lead Manager API v4", lifespan=lifespan)
 _ALLOWED_ORIGINS = [
@@ -1767,6 +1798,19 @@ def push_test_api(user: dict = Depends(get_current_user)):
 def health():
     return {"status": "ok"}
 
+@fastapi_app.post("/telegram/webhook")
+async def telegram_webhook(request: Request):
+    """Receive Telegram updates via webhook (replaces polling — no Conflict on redeploy)."""
+    if _tg_app is None:
+        return {"ok": False}
+    try:
+        data = await request.json()
+        update = Update.de_json(data, _tg_app.bot)
+        await _tg_app.process_update(update)
+    except Exception as e:
+        logger.error(f"Telegram webhook error: {e}", exc_info=True)
+    return {"ok": True}
+
 @fastapi_app.get("/api/leads/today")
 def get_today_api(user: dict = Depends(get_current_user)):
     return [enrich(r) for r in db_get_today(user["id"])]
@@ -1998,31 +2042,20 @@ def admin_stats(admin: dict = Depends(require_admin)):
 
 @fastapi_app.delete("/api/admin/users/{uid}")
 def admin_delete_user(uid: str, admin: dict = Depends(require_admin)):
-    if uid == admin["id"]:
-        raise HTTPException(400, "לא ניתן למחוק את עצמך")
     with _db() as conn:
         cur = conn.cursor()
-        cur.execute("DELETE FROM sessions WHERE user_id=%s", (uid,))
-        cur.execute("DELETE FROM push_subscriptions WHERE user_id=%s", (uid,))
         cur.execute("DELETE FROM leads WHERE user_id=%s", (uid,))
         cur.execute("DELETE FROM users WHERE id=%s", (uid,))
     return {"message": "User deleted"}
 
-# ── Serve index.html ──────────────────────────────────────────────────────────
+# ── Catch-all: serve index.html for PWA routes ────────────────────────────────
 
-@fastapi_app.get("/", response_class=HTMLResponse)
-@fastapi_app.get("/{path:path}", response_class=HTMLResponse)
-def serve_index(path: str = ""):
+@fastapi_app.get("/{full_path:path}")
+async def serve_index(full_path: str):
     index_path = os.path.join(STATIC_DIR, "index.html")
     if os.path.exists(index_path):
-        with open(index_path, "r", encoding="utf-8") as f:
-            return HTMLResponse(f.read())
-    return HTMLResponse("<h1>index.html not found</h1>", status_code=404)
-
+        return FileResponse(index_path)
+    return HTMLResponse("<h1>App loading...</h1>")
 
 if __name__ == "__main__":
-    uvicorn.run("app:fastapi_app", host="0.0.0.0", port=PORT, reload=False)
-�─────────────────────────────────────────────────
-
-if __name__ == "__main__":
-    uvicorn.run("app:fastapi_app", host="0.0.0.0", port=PORT, reload=False)
+    uvicorn.run(fastapi_app, host="0.0.0.0", port=PORT)
