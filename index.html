@@ -318,6 +318,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
             <div class="user-display" id="dd-display">—</div>
             <div class="user-handle" id="dd-username">—</div>
           </div>
+          <div class="user-dropdown-item" onclick="openNotifModal()">🔔 התראות לטלפון</div>
           <div class="user-dropdown-item" onclick="goToAdmin()">⚙️ ניהול מערכת</div>
           <div class="user-dropdown-item" style="color:var(--red)" onclick="doLogout()">🚪 התנתקות</div>
         </div>
@@ -549,6 +550,30 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
       </div>
       <button type="submit" class="btn btn-green btn-full">💾 שמור שינויים</button>
     </form>
+  </div>
+</div>
+
+<!-- NOTIFICATIONS MODAL -->
+<div id="notif-modal" onclick="if(event.target===this)closeNotifModal()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:500;align-items:center;justify-content:center;padding:20px">
+  <div style="background:var(--card);border:1px solid var(--border);border-radius:20px;padding:24px 20px;width:100%;max-width:340px;position:relative">
+    <div style="font-size:19px;font-weight:800;margin-bottom:4px;text-align:center">🔔 התראות לטלפון</div>
+    <div style="font-size:12px;color:var(--text3);text-align:center;margin-bottom:16px">קבל התראה כשיש שיחה מתקרבת</div>
+
+    <!-- iOS warning -->
+    <div id="notif-ios-tip" style="display:none;background:rgba(255,204,0,.10);border:1px solid rgba(255,204,0,.35);border-radius:10px;padding:10px 14px;margin-bottom:14px;font-size:13px;color:#ffd060;text-align:center;line-height:1.7">
+      📱 <b>iPhone / iPad?</b><br>
+      כדי לקבל התראות:<br>
+      לחץ <b>⬆️ שתף</b> → <b>"הוסף למסך הבית"</b><br>
+      ואז פתח את האפליקציה מהאייקון שנוצר
+    </div>
+
+    <!-- Status -->
+    <div id="notif-status-msg" style="text-align:center;font-size:15px;padding:10px 0;color:var(--text2)">⏳ בודק סטטוס...</div>
+
+    <!-- Buttons -->
+    <button id="notif-enable-btn" class="btn btn-blue" style="width:100%;margin-bottom:10px" onclick="doEnableNotif()">🔔 הפעל התראות</button>
+    <button id="notif-test-btn" class="btn btn-gray" style="width:100%;margin-bottom:10px;display:none" onclick="doTestNotif()">📤 שלח התראת בדיקה</button>
+    <button class="btn btn-gray" style="width:100%;color:var(--text2)" onclick="closeNotifModal()">סגור</button>
   </div>
 </div>
 
@@ -802,7 +827,10 @@ function launchApp(user) {
     document.getElementById(id).classList.remove('active'));
   document.getElementById('app').classList.add('active');
   goTo('today', document.querySelector('.nav-btn'));
-  setupPush();
+  // Re-subscribe push if already granted (silent re-registration on login)
+  if ('serviceWorker' in navigator && 'PushManager' in window && Notification.permission === 'granted') {
+    setupPush().catch(() => {});
+  }
 }
 
 async function initApp() {
@@ -868,6 +896,115 @@ async function setupPush() {
     });
   } catch(e) {
     console.warn('Push setup failed:', e);
+  }
+}
+
+// ── Notifications modal ────────────────────────────────────────────────────
+async function openNotifModal() {
+  document.getElementById('user-dropdown')?.classList.remove('open');
+  const modal = document.getElementById('notif-modal');
+  modal.style.display = 'flex';
+  // iOS: only show warning when in browser (not PWA/standalone)
+  const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) && !/android/i.test(navigator.userAgent);
+  const isStandalone = window.navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches;
+  document.getElementById('notif-ios-tip').style.display = (isIOS && !isStandalone) ? 'block' : 'none';
+  await refreshNotifStatus();
+}
+
+function closeNotifModal() {
+  document.getElementById('notif-modal').style.display = 'none';
+}
+
+async function refreshNotifStatus() {
+  const statusEl  = document.getElementById('notif-status-msg');
+  const enableBtn = document.getElementById('notif-enable-btn');
+  const testBtn   = document.getElementById('notif-test-btn');
+
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+    statusEl.innerHTML = '❌ <b>הדפדפן לא תומך בהתראות</b><br><span style="font-size:12px;color:var(--text3)">השתמש ב-Chrome / Android</span>';
+    enableBtn.style.display = 'none';
+    testBtn.style.display = 'none';
+    return;
+  }
+  if (Notification.permission === 'denied') {
+    statusEl.innerHTML = '🚫 <b>התראות חסומות</b><br><span style="font-size:12px;color:var(--text3)">פתח הגדרות דפדפן ← אתרים ← התראות ← אפשר</span>';
+    enableBtn.style.display = 'none';
+    testBtn.style.display = 'none';
+    return;
+  }
+  try {
+    const data = await apiFetch('/api/push/status').then(r => r.json());
+    if (data.subscribed) {
+      statusEl.innerHTML = '🟢 <b>התראות פעילות</b>';
+      enableBtn.textContent = '🔄 עדכן הרשמה';
+      enableBtn.style.display = 'block';
+      testBtn.style.display = 'block';
+    } else {
+      statusEl.innerHTML = '🔴 <b>התראות כבויות</b>';
+      enableBtn.textContent = '🔔 הפעל התראות';
+      enableBtn.style.display = 'block';
+      testBtn.style.display = 'none';
+    }
+  } catch(e) {
+    statusEl.textContent = '⚠️ שגיאה בבדיקת סטטוס';
+  }
+}
+
+async function doEnableNotif() {
+  const btn = document.getElementById('notif-enable-btn');
+  btn.disabled = true;
+  btn.textContent = '⏳ מפעיל...';
+  try {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window))
+      throw new Error('הדפדפן לא תומך');
+    // Register SW
+    const reg = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+    await navigator.serviceWorker.ready;
+    // Request permission
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') throw new Error('ההרשאה נדחתה');
+    // Get VAPID public key
+    const token = localStorage.getItem('auth_token');
+    const { publicKey } = await fetch('/api/push/vapid-key').then(r => r.json());
+    if (!publicKey) throw new Error('אין VAPID key');
+    // Subscribe
+    const sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(publicKey)
+    });
+    // Save to server
+    const res = await apiFetch('/api/push/subscribe', {
+      method: 'POST',
+      body: JSON.stringify({ subscription: sub.toJSON() })
+    });
+    if (!res.ok) throw new Error('שמירה נכשלה');
+    toast('✅ התראות הופעלו!');
+    await refreshNotifStatus();
+  } catch(e) {
+    toast('❌ ' + (e.message || 'שגיאה בהפעלה'));
+    await refreshNotifStatus();
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function doTestNotif() {
+  const btn = document.getElementById('notif-test-btn');
+  btn.disabled = true;
+  btn.textContent = '⏳ שולח...';
+  try {
+    const res = await apiFetch('/api/push/test', { method: 'POST' });
+    if (res.ok) {
+      toast('📤 התראת בדיקה נשלחה — בדוק את הטלפון!');
+    } else {
+      const err = await res.json().catch(() => ({}));
+      toast('❌ ' + (err.detail || 'שליחה נכשלה'));
+    }
+  } catch(e) {
+    toast('❌ שגיאה');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '📤 שלח התראת בדיקה';
   }
 }
 

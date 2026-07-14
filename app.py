@@ -458,16 +458,18 @@ def _send_push_one(sub_record: dict, title: str, body: str, url: str = "/") -> b
             vapid_private_key=priv,
             vapid_claims={"sub": "mailto:admin@bar-lead-bot.onrender.com"},
         )
+        logger.info(f"Push sent OK: {title}")
         return True
     except WebPushException as ex:
         resp = getattr(ex, "response", None)
+        status = resp.status_code if resp else "N/A"
+        logger.error(f"WebPushException [{status}]: {ex}")
         if resp and resp.status_code in (404, 410):
             db_delete_push_subscription(sub_record["id"])
-        else:
-            logger.error(f"WebPushException: {ex}")
+            logger.info("Deleted stale push subscription")
         return False
     except Exception as e:
-        logger.error(f"push error: {e}")
+        logger.error(f"push error: {e}", exc_info=True)
         return False
 
 def push_to_user(user_id: str, title: str, body: str, url: str = "/"):
@@ -1731,6 +1733,24 @@ def get_vapid_public_key():
 @fastapi_app.post("/api/push/subscribe")
 def push_subscribe(body: PushSubscribeRequest, user: dict = Depends(get_current_user)):
     db_save_push_subscription(user["id"], json.dumps(body.subscription))
+    logger.info(f"Push subscription saved for user {user['id']}")
+    return {"ok": True}
+
+@fastapi_app.get("/api/push/status")
+def push_status_api(user: dict = Depends(get_current_user)):
+    subs = db_get_push_subscriptions_for_user(user["id"])
+    return {"subscribed": len(subs) > 0, "webpush_available": WEBPUSH_AVAILABLE}
+
+@fastapi_app.post("/api/push/test")
+def push_test_api(user: dict = Depends(get_current_user)):
+    if not WEBPUSH_AVAILABLE:
+        raise HTTPException(503, "Web push not available on server")
+    subs = db_get_push_subscriptions_for_user(user["id"])
+    if not subs:
+        raise HTTPException(400, "אין מנוי. לחץ 'הפעל התראות' קודם.")
+    sent = sum(1 for s in subs if _send_push_one(s, "✅ בדיקה הצליחה!", "מערכת ההתראות עובדת! 🎉"))
+    if not sent:
+        raise HTTPException(500, "שליחת ההתראה נכשלה — בדוק לוגים ב-Render")
     return {"ok": True}
 
 # ── Lead Routes ───────────────────────────────────────────────────────────────
@@ -1991,7 +2011,10 @@ def serve_index(path: str = ""):
             return HTMLResponse(f.read())
     return HTMLResponse("<h1>index.html not found</h1>", status_code=404)
 
-# ── Entry point ─────────────────────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    uvicorn.run("app:fastapi_app", host="0.0.0.0", port=PORT, reload=False)
+�─────────────────────────────────────────────────
 
 if __name__ == "__main__":
     uvicorn.run("app:fastapi_app", host="0.0.0.0", port=PORT, reload=False)
