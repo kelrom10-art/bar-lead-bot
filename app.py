@@ -1418,8 +1418,7 @@ async def job_stale_leads(app):
     push_to_all("🔔 לידים ממתינים", f"{len(stale)} לידים ללא עדכון 3+ ימים")
 
 def run_bot_thread():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    import time as _time
 
     if not BOT_TOKEN or not OWNER_CHAT_ID:
         logger.warning("BOT_TOKEN or OWNER_CHAT_ID not set — bot not started")
@@ -1446,28 +1445,37 @@ def run_bot_thread():
         s.start()
         logger.info("Scheduler ✓")
 
-    conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex("^➕ הוספת ליד$"), add_start)],
-        states={
-            ASK_NAME:  [MessageHandler(filters.TEXT & ~filters.COMMAND, got_name)],
-            ASK_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_phone)],
-            ASK_TIME:  [MessageHandler(filters.TEXT & ~filters.COMMAND, got_time)],
-        },
-        fallbacks=[
-            CommandHandler("cancel", cancel_add),
-            MessageHandler(filters.Regex(menu_regex), cancel_add),
-        ],
-        allow_reentry=True,
-    )
+    for attempt in range(6):
+        try:
+            conv = ConversationHandler(
+                entry_points=[MessageHandler(filters.Regex("^➕ הוספת ליד$"), add_start)],
+                states={
+                    ASK_NAME:  [MessageHandler(filters.TEXT & ~filters.COMMAND, got_name)],
+                    ASK_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_phone)],
+                    ASK_TIME:  [MessageHandler(filters.TEXT & ~filters.COMMAND, got_time)],
+                },
+                fallbacks=[
+                    CommandHandler("cancel", cancel_add),
+                    MessageHandler(filters.Regex(menu_regex), cancel_add),
+                ],
+                allow_reentry=True,
+            )
+            bot_app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
+            bot_app.add_handler(CommandHandler("start", cmd_start))
+            bot_app.add_handler(conv)
+            bot_app.add_handler(CallbackQueryHandler(callback_handler))
+            bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-    bot_app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
-    bot_app.add_handler(CommandHandler("start", cmd_start))
-    bot_app.add_handler(conv)
-    bot_app.add_handler(CallbackQueryHandler(callback_handler))
-    bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-
-    logger.info("Bot polling started 🚀")
-    bot_app.run_polling(drop_pending_updates=True, stop_signals=None)
+            logger.info(f"Bot polling started (attempt {attempt + 1}) 🚀")
+            bot_app.run_polling(drop_pending_updates=True, stop_signals=None)
+            break  # clean exit
+        except Exception as exc:
+            if "Conflict" in str(exc) and attempt < 5:
+                logger.warning(f"Telegram Conflict (attempt {attempt+1}/6) — previous instance still running, retry in 15s")
+                _time.sleep(15)
+            else:
+                logger.error(f"Bot thread fatal error: {exc}", exc_info=True)
+                break
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  FASTAPI APPLICATION
@@ -2014,7 +2022,7 @@ def serve_index(path: str = ""):
 
 if __name__ == "__main__":
     uvicorn.run("app:fastapi_app", host="0.0.0.0", port=PORT, reload=False)
-�─────────────────────────────────────────────────
+�─────────────────────────────────────────────────
 
 if __name__ == "__main__":
     uvicorn.run("app:fastapi_app", host="0.0.0.0", port=PORT, reload=False)
