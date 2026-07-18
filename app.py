@@ -391,18 +391,36 @@ _vapid_priv: Optional[str] = None
 _vapid_pub:  Optional[str] = None
 
 def _generate_vapid_keys():
+    """Generate VAPID key pair. Private key stored as base64url raw bytes (most compatible)."""
     priv = ec.generate_private_key(ec.SECP256R1())
-    priv_pem = priv.private_bytes(
-        serialization.Encoding.PEM,
-        serialization.PrivateFormat.PKCS8,
-        serialization.NoEncryption()
-    ).decode()
+    # Store private key as base64url-encoded raw 32-byte integer
+    priv_int = priv.private_numbers().private_value
+    priv_b64 = base64.urlsafe_b64encode(priv_int.to_bytes(32, 'big')).rstrip(b'=').decode()
     pub_bytes = priv.public_key().public_bytes(
         serialization.Encoding.X962,
         serialization.PublicFormat.UncompressedPoint
     )
     pub_b64 = base64.urlsafe_b64encode(pub_bytes).rstrip(b'=').decode()
-    return priv_pem, pub_b64
+    return priv_b64, pub_b64
+
+def _to_vapid_b64url(key: str) -> str:
+    """Normalise any private key format → base64url raw bytes (pywebpush Vapid.from_string)."""
+    if not key:
+        return key
+    key = key.strip()
+    if key.startswith("-----"):
+        # PEM (PKCS8 or EC) — extract raw private integer
+        try:
+            from cryptography.hazmat.primitives.serialization import load_pem_private_key
+            priv_key = load_pem_private_key(key.encode(), password=None)
+            priv_int = priv_key.private_numbers().private_value
+            converted = base64.urlsafe_b64encode(priv_int.to_bytes(32, 'big')).rstrip(b'=').decode()
+            logger.info("Converted PEM VAPID key → base64url format")
+            return converted
+        except Exception as e:
+            logger.error(f"VAPID key conversion failed: {e}")
+            return key
+    return key  # already base64url
 
 def get_vapid_keys() -> tuple:
     global _vapid_priv, _vapid_pub
@@ -412,22 +430,26 @@ def get_vapid_keys() -> tuple:
     p = os.getenv("VAPID_PRIVATE_KEY", "")
     q = os.getenv("VAPID_PUBLIC_KEY", "")
     if p and q:
+        p = _to_vapid_b64url(p)
         _vapid_priv, _vapid_pub = p, q
         return p, q
     # DB
     p = db_get_setting("vapid_private_key") or ""
     q = db_get_setting("vapid_public_key") or ""
     if p and q:
+        p = _to_vapid_b64url(p)
+        if not p.startswith("-----"):  # converted successfully
+            db_set_setting("vapid_private_key", p)  # save back in correct format
         _vapid_priv, _vapid_pub = p, q
         return p, q
-    # Generate
+    # Generate fresh keys
     if not WEBPUSH_AVAILABLE:
         return "", ""
     p, q = _generate_vapid_keys()
     db_set_setting("vapid_private_key", p)
     db_set_setting("vapid_public_key", q)
     _vapid_priv, _vapid_pub = p, q
-    logger.info(f"VAPID keys generated. Public: {q}")
+    logger.info(f"VAPID keys generated. Public: {q[:20]}...")
     return p, q
 
 def db_get_push_subscriptions_for_user(user_id: str) -> list:
@@ -447,17 +469,21 @@ def db_delete_push_subscription(sub_id: str):
         cur = conn.cursor()
         cur.execute("DELETE FROM push_subscriptions WHERE id=%s", (sub_id,))
 
-def _send_push_one(sub_record: dict, title: str, body: str, url: str = "/") -> bool:
+def _send_push_one(sub_record: dict, title: str, body: str, url: str = "/", phone: str = "") -> bool:
     if not WEBPUSH_AVAILABLE:
         return False
     try:
         priv, pub = get_vapid_keys()
         if not priv:
+            logger.warning("No VAPID private key — push skipped")
             return False
         sub_info = json.loads(sub_record["subscription"])
+        payload = {"title": title, "body": body, "url": url}
+        if phone:
+            payload["phone"] = phone
         _webpush(
             subscription_info=sub_info,
-            data=json.dumps({"title": title, "body": body, "url": url}),
+            data=json.dumps(payload),
             vapid_private_key=priv,
             vapid_claims={"sub": "mailto:admin@bar-lead-bot.onrender.com"},
         )
@@ -466,26 +492,37 @@ def _send_push_one(sub_record: dict, title: str, body: str, url: str = "/") -> b
     except WebPushException as ex:
         resp = getattr(ex, "response", None)
         status = resp.status_code if resp else "N/A"
-        logger.error(f"WebPushException [{status}]: {ex}")
+        body_text = ""
+        if resp:
+            try: body_text = resp.text[:200]
+            except: pass
+        logger.error(f"WebPushException [{status}] body={body_text}: {ex}")
         if resp and resp.status_code in (404, 410):
             db_delete_push_subscription(sub_record["id"])
             logger.info("Deleted stale push subscription")
-        return False
+        raise  # re-raise so test endpoint can show the real error
     except Exception as e:
         logger.error(f"push error: {e}", exc_info=True)
-        return False
+        raise
 
-def push_to_user(user_id: str, title: str, body: str, url: str = "/"):
+def push_to_user(user_id: str, title: str, body: str, url: str = "/", phone: str = ""):
     if not WEBPUSH_AVAILABLE:
         return
-    for sub in db_get_push_subscriptions_for_user(user_id):
-        _send_push_one(sub, title, body, url)
+    subs = db_get_push_subscriptions_for_user(user_id)
+    logger.info(f"push_to_user: user={user_id} subs={len(subs)} title={title}")
+    for sub in subs:
+        try:
+            _send_push_one(sub, title, body, url, phone)
+        except Exception as e:
+            logger.error(f"push_to_user send failed: {e}")
 
-def push_to_all(title: str, body: str, url: str = "/"):
+def push_to_all(title: str, body: str, url: str = "/", phone: str = ""):
     if not WEBPUSH_AVAILABLE:
         return
-    for sub in db_get_all_push_subscriptions():
-        _send_push_one(sub, title, body, url)
+    subs = db_get_all_push_subscriptions()
+    logger.info(f"push_to_all: subs={len(subs)} title={title}")
+    for sub in subs:
+        _send_push_one(sub, title, body, url, phone)
 
 def _send_tg(html_msg: str) -> None:
     """Synchronous fire-and-forget Telegram notification (never raises)."""
@@ -1313,15 +1350,25 @@ async def job_check_reminders(app):
                 push_title = f"⏰ שיחה בעוד {mins_diff} דקות"
                 push_body  = f"{ld['name']} · {ld.get('phone','—')} בשעה {time_str}"
 
-            # Telegram
-            await app.bot.send_message(
-                chat_id=OWNER_CHAT_ID,
-                text=tg_text,
-                parse_mode="Markdown")
-            # Web Push
+            # Web Push — primary notification channel
             uid = ld.get("user_id") or db_get_first_user_id()
+            push_sent = False
             if uid:
-                push_to_user(uid, push_title, push_body)
+                push_subs = db_get_push_subscriptions_for_user(uid)
+                if push_subs:
+                    for sub in push_subs:
+                        push_sent = _send_push_one(sub, push_title, push_body, "/", ld.get("phone","")) or push_sent
+
+            # Telegram — always send (as backup)
+            try:
+                await app.bot.send_message(
+                    chat_id=OWNER_CHAT_ID,
+                    text=tg_text,
+                    parse_mode="Markdown")
+            except Exception as tg_err:
+                logger.warning(f"Telegram send failed: {tg_err}")
+
+            logger.info(f"Reminder sent: lead={ld.get('id')} push={push_sent}")
             db_update_lead(ld["id"], status=ST_PRE_REMINDED)
         except Exception as e:
             logger.error(f"pre_reminder [{ld.get('id')}]: {e}")
@@ -1701,27 +1748,39 @@ self.addEventListener('activate', e => e.waitUntil(clients.claim()));
 self.addEventListener('push', function(event) {
   var data = {};
   try { data = event.data.json(); } catch(e) {}
-  var title = data.title || 'Bar Lead Manager';
+  var title = data.title || 'Bar Lead Manager 🍸';
   var opts = {
     body:      data.body || '',
     icon:      '/icon-192.png',
     badge:     '/icon-192.png',
-    data:      { url: data.url || '/' },
-    vibrate:   [200, 100, 200],
-    tag:       'blm-notification',
+    data:      { url: data.url || '/', phone: data.phone || '' },
+    vibrate:   [300, 100, 300, 100, 300],
+    tag:       'blm-reminder',
     renotify:  true,
-    requireInteraction: false
+    requireInteraction: true,
+    silent:    false
   };
+  if (data.phone) {
+    opts.actions = [
+      { action: 'call', title: '📞 התקשר' },
+      { action: 'dismiss', title: 'סגור' }
+    ];
+  }
   event.waitUntil(self.registration.showNotification(title, opts));
 });
 
 self.addEventListener('notificationclick', function(event) {
   event.notification.close();
+  var phone = event.notification.data && event.notification.data.phone;
+  if (event.action === 'call' && phone) {
+    event.waitUntil(clients.openWindow('tel:' + phone));
+    return;
+  }
   var url = (event.notification.data && event.notification.data.url) || '/';
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function(list) {
       for (var i = 0; i < list.length; i++) {
-        if ('focus' in list[i]) return list[i].focus();
+        if ('focus' in list[i]) { list[i].focus(); return; }
       }
       if (clients.openWindow) return clients.openWindow(url);
     })
@@ -1787,10 +1846,36 @@ def push_test_api(user: dict = Depends(get_current_user)):
     subs = db_get_push_subscriptions_for_user(user["id"])
     if not subs:
         raise HTTPException(400, "אין מנוי. לחץ 'הפעל התראות' קודם.")
-    sent = sum(1 for s in subs if _send_push_one(s, "✅ בדיקה הצליחה!", "מערכת ההתראות עובדת! 🎉"))
+    last_err = ""
+    sent = 0
+    for s in subs:
+        try:
+            _send_push_one(s, "✅ בדיקה הצליחה!", "מערכת ההתראות עובדת! 🎉", "/", "")
+            sent += 1
+        except Exception as e:
+            last_err = str(e)[:300]
     if not sent:
-        raise HTTPException(500, "שליחת ההתראה נכשלה — בדוק לוגים ב-Render")
+        raise HTTPException(500, f"שגיאה: {last_err}" if last_err else "שליחה נכשלה")
     return {"ok": True}
+
+@fastapi_app.get("/api/push/debug")
+def push_debug(user: dict = Depends(get_current_user)):
+    """Diagnostic endpoint — returns push system status for troubleshooting."""
+    priv, pub = get_vapid_keys()
+    subs = db_get_push_subscriptions_for_user(user["id"])
+    all_subs = db_get_all_push_subscriptions()
+    priv_format = "base64url (correct)" if priv and not priv.startswith("-----") else \
+                  "PEM (converting)" if priv and priv.startswith("-----") else \
+                  "not set"
+    return {
+        "webpush_available": WEBPUSH_AVAILABLE,
+        "vapid_key_format": priv_format,
+        "vapid_public_key_set": bool(pub),
+        "vapid_public_key_prefix": pub[:20] + "..." if pub else None,
+        "your_subscriptions": len(subs),
+        "total_subscriptions_all_users": len(all_subs),
+        "user_id": user["id"],
+    }
 
 # ── Lead Routes ───────────────────────────────────────────────────────────────
 
@@ -2011,18 +2096,22 @@ def export_excel(user: dict = Depends(get_current_user)):
 # ── Admin Routes ──────────────────────────────────────────────────────────────
 
 @fastapi_app.get("/api/admin/users")
+
+# ── Admin Routes ──────────────────────────────────────────────────────────────
+
+@fastapi_app.get("/api/admin/users")
 def admin_list_users(admin: dict = Depends(require_admin)):
     with _db() as conn:
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute("SELECT id, username, display_name, created_at, is_admin FROM users ORDER BY created_at")
-        users = [dict(r) for r in cur.fetchall()]
-    # add lead count per user
-    for u in users:
-        with _db() as conn:
-            cur = conn.cursor()
-            cur.execute("SELECT COUNT(*) FROM leads WHERE user_id=%s", (u["id"],))
-            u["lead_count"] = cur.fetchone()[0]
-    return users
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT u.id, u.username, u.display_name, u.role, u.created_at,
+                   COUNT(l.id) as lead_count
+            FROM users u
+            LEFT JOIN leads l ON l.user_id = u.id
+            GROUP BY u.id ORDER BY u.created_at DESC
+        """)
+        rows = [dict(zip([d[0] for d in cur.description], r)) for r in cur.fetchall()]
+    return rows
 
 @fastapi_app.get("/api/admin/stats")
 def admin_stats(admin: dict = Depends(require_admin)):
@@ -2032,13 +2121,9 @@ def admin_stats(admin: dict = Depends(require_admin)):
         total_leads = cur.fetchone()[0]
         cur.execute("SELECT COUNT(*) FROM users")
         total_users = cur.fetchone()[0]
-        cur.execute("SELECT COALESCE(SUM(sale_amount),0) FROM leads WHERE status='won'")
+        cur.execute("SELECT COALESCE(SUM(sale_amount),0) FROM leads WHERE status=\'won\'")
         total_revenue = float(cur.fetchone()[0])
-    return {
-        "total_leads":   total_leads,
-        "total_users":   total_users,
-        "total_revenue": total_revenue,
-    }
+    return {"total_leads": total_leads, "total_users": total_users, "total_revenue": total_revenue}
 
 @fastapi_app.delete("/api/admin/users/{uid}")
 def admin_delete_user(uid: str, admin: dict = Depends(require_admin)):
@@ -2047,8 +2132,6 @@ def admin_delete_user(uid: str, admin: dict = Depends(require_admin)):
         cur.execute("DELETE FROM leads WHERE user_id=%s", (uid,))
         cur.execute("DELETE FROM users WHERE id=%s", (uid,))
     return {"message": "User deleted"}
-
-# ── Catch-all: serve index.html for PWA routes ────────────────────────────────
 
 @fastapi_app.get("/{full_path:path}")
 async def serve_index(full_path: str):

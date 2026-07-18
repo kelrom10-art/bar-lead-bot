@@ -207,6 +207,39 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
 /* ── TOAST ── */
 .toast{position:fixed;bottom:calc(var(--nav-h) + var(--safe-bottom) + 12px);left:50%;transform:translateX(-50%) translateY(20px);background:rgba(20,21,40,.96);border:1px solid var(--border);border-radius:24px;padding:10px 20px;font-size:14px;font-weight:600;white-space:nowrap;opacity:0;pointer-events:none;transition:all .3s;z-index:1000;backdrop-filter:blur(8px)}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+/* ── FAB ── */
+.fab{position:fixed;bottom:calc(var(--nav-h) + var(--safe-bottom) + 14px);left:18px;width:52px;height:52px;border-radius:50%;background:linear-gradient(135deg,var(--accent),#c2185b);border:none;color:#fff;font-size:26px;font-weight:300;cursor:pointer;box-shadow:0 4px 20px rgba(232,65,90,.5);z-index:120;display:flex;align-items:center;justify-content:center;transition:transform .15s,box-shadow .15s;line-height:1}
+.fab:active{transform:scale(.92);box-shadow:0 2px 10px rgba(232,65,90,.4)}
+/* ── QUICK-ADD MODAL ── */
+#quick-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:300;align-items:flex-end;justify-content:center}
+#quick-modal.open{display:flex}
+.quick-sheet{background:var(--card);border:1px solid var(--border);border-radius:22px 22px 0 0;padding:20px 20px calc(20px + var(--safe-bottom));width:100%;max-width:480px}
+.quick-sheet .modal-handle{width:36px;height:4px;background:var(--border);border-radius:2px;margin:0 auto 16px}
+.quick-title{font-size:17px;font-weight:800;margin-bottom:16px;text-align:center}
+/* ── PIPELINE VIEW ── */
+.view-toggle{display:flex;gap:6px;padding:0 12px 10px}
+.view-btn{flex:1;padding:7px 0;border:1px solid var(--border);border-radius:20px;background:rgba(255,255,255,.06);color:var(--text2);font-size:12px;font-weight:600;cursor:pointer;transition:all .15s}
+.view-btn.active{background:var(--accent);border-color:var(--accent);color:#fff}
+#pipeline-view{display:none;padding:0 10px 80px;overflow-x:auto;scrollbar-width:none}
+#pipeline-view::-webkit-scrollbar{display:none}
+#pipeline-view.visible{display:flex;gap:10px}
+.pipe-col{flex:0 0 180px;display:flex;flex-direction:column;gap:8px}
+.pipe-col-header{background:rgba(255,255,255,.06);border:1px solid var(--border);border-radius:12px;padding:8px 12px;text-align:center;font-size:12px;font-weight:700;position:sticky;top:0}
+.pipe-col-body{display:flex;flex-direction:column;gap:6px;min-height:120px}
+.pipe-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:10px 12px;cursor:pointer;transition:transform .15s,box-shadow .15s;touch-action:none}
+.pipe-card:active{transform:scale(.97)}
+.pipe-card.drag-over-col{box-shadow:0 0 0 2px var(--accent)}
+.pipe-card-name{font-size:13px;font-weight:700;margin-bottom:3px}
+.pipe-card-phone{font-size:11px;color:var(--text2)}
+.pipe-card-time{font-size:10px;color:var(--text3);margin-top:4px}
+.pipe-col-body.drag-target{border:2px dashed var(--accent);border-radius:10px;background:rgba(232,65,90,.05)}
+
+/* ── NOTIF BANNER ── */
+#notif-banner{display:none;position:sticky;top:0;left:0;right:0;z-index:200;background:linear-gradient(135deg,#1a0a2e,#2d0a20);border-bottom:1px solid rgba(232,65,90,.4);padding:10px 14px;align-items:center;gap:10px;cursor:pointer}
+#notif-banner.show{display:flex}
+.notif-banner-text{flex:1;font-size:13px;font-weight:600;color:#ffcce8;line-height:1.35}
+.notif-banner-btn{background:var(--accent);border:none;color:#fff;padding:7px 14px;border-radius:20px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;flex-shrink:0}
 </style>
 </head>
 <body>
@@ -305,6 +338,13 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
 <!-- ── APP ───────────────────────────────────────────────────── -->
 <div id="app">
 
+  <!-- NOTIF BANNER -->
+  <div id="notif-banner" onclick="openNotifModal()">
+    <span style="font-size:22px">🔔</span>
+    <div class="notif-banner-text">הפעל התראות<br><span style="font-size:11px;font-weight:400;color:rgba(255,204,232,.7)">קבל התראה כשיש שיחה — כמו ווצאפ</span></div>
+    <button class="notif-banner-btn" onclick="event.stopPropagation();doEnableNotifQuick()">הפעל עכשיו</button>
+  </div>
+
   <!-- TODAY -->
   <div id="screen-today" class="screen active">
     <div class="screen-header">
@@ -362,7 +402,12 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
       <button class="sort-btn" id="sort-name" onclick="setSort('name')">א-ב שם</button>
       <button class="sort-btn" id="sort-amount" onclick="setSort('amount')">💰 סכום</button>
     </div>
+    <div class="view-toggle">
+      <button class="view-btn active" id="vbtn-list" onclick="switchView('list')">☰ רשימה</button>
+      <button class="view-btn" id="vbtn-pipe" onclick="switchView('pipe')">▦ פייפליין</button>
+    </div>
     <div class="leads-list" id="leads-list"></div>
+    <div id="pipeline-view"></div>
   </div>
 
   <!-- ADD LEAD -->
@@ -481,7 +526,35 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
     </button>
   </nav>
 
+
+  <!-- FAB quick-add -->
+  <button class="fab" onclick="openQuickAdd()" aria-label="הוסף ליד">+</button>
 </div><!-- /#app -->
+<!-- QUICK-ADD MODAL -->
+<div id="quick-modal" onclick="if(event.target===this)closeQuickAdd()">
+  <div class="quick-sheet">
+    <div class="modal-handle"></div>
+    <div class="quick-title">⚡ הוסף ליד מהיר</div>
+    <form id="quick-form" onsubmit="submitQuick(event)">
+      <div class="form-group">
+        <label class="form-label">👤 שם *</label>
+        <input id="q-name" class="form-input" placeholder="שם מלא" required autocomplete="off">
+      </div>
+      <div class="form-group">
+        <label class="form-label">📱 טלפון *</label>
+        <input id="q-phone" class="form-input" type="tel" placeholder="05X-XXXXXXX" required>
+      </div>
+      <div class="form-group">
+        <label class="form-label">📅 זמן שיחה</label>
+        <input id="q-time" class="form-input" type="datetime-local">
+      </div>
+      <button type="submit" class="btn btn-full" style="background:linear-gradient(135deg,var(--accent),#c2185b);color:#fff;font-size:15px;padding:13px;margin-top:4px">
+        🎯 הוסף ליד
+      </button>
+    </form>
+  </div>
+</div>
+
 
 <!-- LEAD DETAIL MODAL -->
 <div class="modal-overlay" id="lead-modal" onclick="closeModal(event)">
@@ -560,11 +633,12 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
     <div style="font-size:12px;color:var(--text3);text-align:center;margin-bottom:16px">קבל התראה כשיש שיחה מתקרבת</div>
 
     <!-- iOS warning -->
-    <div id="notif-ios-tip" style="display:none;background:rgba(255,204,0,.10);border:1px solid rgba(255,204,0,.35);border-radius:10px;padding:10px 14px;margin-bottom:14px;font-size:13px;color:#ffd060;text-align:center;line-height:1.7">
-      📱 <b>iPhone / iPad?</b><br>
-      כדי לקבל התראות:<br>
-      לחץ <b>⬆️ שתף</b> → <b>"הוסף למסך הבית"</b><br>
-      ואז פתח את האפליקציה מהאייקון שנוצר
+    <div id="notif-ios-tip" style="display:none;background:rgba(255,204,0,.10);border:1px solid rgba(255,204,0,.35);border-radius:10px;padding:12px 14px;margin-bottom:14px;font-size:13px;color:#ffd060;line-height:1.9">
+      <div style="font-size:15px;font-weight:800;margin-bottom:6px;text-align:center">📱 iPhone? — 3 שלבים:</div>
+      <div>1️⃣ פתח את <b>Safari</b> (לא Chrome!)</div>
+      <div>2️⃣ לחץ <b>⬆️ שתף</b> ← <b>"הוסף למסך הבית"</b></div>
+      <div>3️⃣ פתח מהאייקון החדש ← לחץ <b>הפעל התראות</b></div>
+      <div style="margin-top:8px;font-size:11px;color:rgba(255,204,0,.7);text-align:center">נדרש iOS 16.4 ומעלה</div>
     </div>
 
     <!-- Status -->
@@ -827,9 +901,50 @@ function launchApp(user) {
     document.getElementById(id).classList.remove('active'));
   document.getElementById('app').classList.add('active');
   goTo('today', document.querySelector('.nav-btn'));
-  // Re-subscribe push if already granted (silent re-registration on login)
-  if ('serviceWorker' in navigator && 'PushManager' in window && Notification.permission === 'granted') {
-    setupPush().catch(() => {});
+  // Push: if already granted, re-subscribe silently; else show banner
+  if ('serviceWorker' in navigator && 'PushManager' in window) {
+    if (Notification.permission === 'granted') {
+      setupPush().catch(() => {});
+      hidePushBanner();
+    } else {
+      showPushBanner();
+    }
+  }
+}
+
+function showPushBanner() {
+  const b = document.getElementById('notif-banner');
+  if (b) b.classList.add('show');
+}
+function hidePushBanner() {
+  const b = document.getElementById('notif-banner');
+  if (b) b.classList.remove('show');
+}
+
+// Quick-enable from banner (no modal)
+async function doEnableNotifQuick() {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+    toast('הדפדפן לא תומך בהתראות :('); return;
+  }
+  try {
+    const reg = await navigator.serviceWorker.register('/sw.js', {scope:'/'});
+    await navigator.serviceWorker.ready;
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') {
+      toast('💡 כדי לאפשר: לך להגדרות הדפדפן ← אתר זה ← אפשר התראות'); return;
+    }
+    const { publicKey } = await fetch('/api/push/vapid-key').then(r=>r.json());
+    if (!publicKey) { toast('❌ שגיאה בהגדרת מפתח'); return; }
+    const sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(publicKey)
+    });
+    const res = await apiFetch('/api/push/subscribe',{method:'POST',body:JSON.stringify({subscription:sub.toJSON()})});
+    if (res.ok) { toast('✅ התראות הופעלו! תקבל התראה לפני כל שיחה'); hidePushBanner(); }
+    else toast('❌ שגיאה בשמירה');
+  } catch(e) {
+    console.error('push quick enable:', e);
+    // Likely iOS — show PWA instructions
+    openNotifModal();
   }
 }
 
@@ -1561,6 +1676,156 @@ if ('serviceWorker' in navigator) {
 
 // ── Boot ───────────────────────────────────────────────────────────────────
 initApp();
+
+// ── QUICK ADD FAB ──────────────────────────────────────────────────────────
+function openQuickAdd() {
+  // pre-fill datetime to now + 1h rounded to nearest 30 min
+  const d = new Date();
+  d.setHours(d.getHours()+1, d.getMinutes()<30?30:0, 0, 0);
+  const pad = n => String(n).padStart(2,'0');
+  document.getElementById('q-time').value =
+    `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  document.getElementById('quick-modal').classList.add('open');
+  setTimeout(() => document.getElementById('q-name')?.focus(), 120);
+}
+function closeQuickAdd() {
+  document.getElementById('quick-modal').classList.remove('open');
+}
+async function submitQuick(e) {
+  e.preventDefault();
+  const name  = document.getElementById('q-name').value.trim();
+  const phone = document.getElementById('q-phone').value.trim();
+  const time  = document.getElementById('q-time').value;
+  if (!name || !phone) { toast('מלא שם וטלפון'); return; }
+  const body = { name, phone, call_time: fromLocalDatetime(time) };
+  const res = await apiFetch('/api/leads', {method:'POST', body:JSON.stringify(body)});
+  if (res.ok) {
+    document.getElementById('quick-form').reset();
+    closeQuickAdd();
+    toast('🎯 ליד נוסף!');
+    if (document.getElementById('screen-leads').classList.contains('active')) loadLeads();
+    loadToday();
+  } else { toast('❌ שגיאה'); }
+}
+
+// ── PIPELINE VIEW ──────────────────────────────────────────────────────────
+let pipeView = 'list'; // 'list' | 'pipe'
+const PIPE_COLS = [
+  { key:'new',       label:'🆕 חדש',      color:'var(--blue)' },
+  { key:'called',    label:'📞 קשר',      color:'var(--purple)' },
+  { key:'follow_up', label:'🔄 follow-up', color:'var(--accent)' },
+  { key:'won',       label:'✅ נסגר',     color:'var(--green)' },
+];
+
+function switchView(v) {
+  pipeView = v;
+  document.getElementById('vbtn-list').classList.toggle('active', v==='list');
+  document.getElementById('vbtn-pipe').classList.toggle('active', v==='pipe');
+  document.getElementById('leads-list').style.display  = v==='list' ? '' : 'none';
+  document.getElementById('pipeline-view').classList.toggle('visible', v==='pipe');
+  // hide/show filter & sort rows when in pipe mode
+  document.getElementById('filter-tabs').style.display  = v==='pipe' ? 'none' : '';
+  document.getElementById('source-filter').style.display= v==='pipe' ? 'none' : '';
+  document.querySelector('.sort-row').style.display      = v==='pipe' ? 'none' : '';
+  if (v==='pipe') loadPipeline();
+}
+
+async function loadPipeline() {
+  const pv = document.getElementById('pipeline-view');
+  pv.innerHTML = '<div class="empty"><div class="empty-icon">⏳</div><div>טוען...</div></div>';
+  try {
+    let leads = await apiFetch('/api/leads?').then(r=>r.json());
+    if (!Array.isArray(leads)) leads=[];
+    // Group by status
+    const groups = {};
+    PIPE_COLS.forEach(c => groups[c.key] = []);
+    leads.forEach(l => {
+      if (groups[l.status]) groups[l.status].push(l);
+      else if (l.status==='pre_reminded') groups['new'].push(l);
+    });
+    // Render columns
+    pv.innerHTML = PIPE_COLS.map(col => `
+      <div class="pipe-col" data-col="${col.key}">
+        <div class="pipe-col-header" style="border-top:3px solid ${col.color};color:${col.color}">
+          ${col.label} <span style="font-size:11px;color:var(--text2);font-weight:400">(${groups[col.key].length})</span>
+        </div>
+        <div class="pipe-col-body" id="pcol-${col.key}" ondragover="pipeDragOver(event)" ondrop="pipeDrop(event,'${col.key}')">
+          ${groups[col.key].map(l => renderPipeCard(l)).join('') || '<div style="font-size:12px;color:var(--text3);text-align:center;padding:12px">ריק</div>'}
+        </div>
+      </div>`).join('');
+    // init drag
+    pv.querySelectorAll('.pipe-card').forEach(initPipeDrag);
+  } catch(e) {
+    pv.innerHTML = '<div class="empty"><div class="empty-icon">⚠️</div><div>שגיאה</div></div>';
+  }
+}
+
+function renderPipeCard(l) {
+  const dt = l.call_time ? new Date(l.call_time) : null;
+  const tStr = dt ? `📅 ${dt.toLocaleDateString('he-IL',{day:'2-digit',month:'2-digit'})} ${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}` : '';
+  return `<div class="pipe-card" draggable="true" data-id="${l.id}" onclick="openLead('${l.id}')">
+    <div class="pipe-card-name">${esc(l.name)}</div>
+    <div class="pipe-card-phone">${esc(l.phone)}</div>
+    ${tStr ? `<div class="pipe-card-time">${tStr}</div>` : ''}
+  </div>`;
+}
+
+let dragLeadId = null;
+function initPipeDrag(card) {
+  card.addEventListener('dragstart', e => {
+    dragLeadId = card.dataset.id;
+    card.style.opacity = '.4';
+    e.dataTransfer.effectAllowed = 'move';
+  });
+  card.addEventListener('dragend', () => { card.style.opacity = ''; dragLeadId = null; });
+  // Touch support
+  let touchTimer = null;
+  card.addEventListener('touchstart', e => {
+    touchTimer = setTimeout(() => { dragLeadId = card.dataset.id; card.style.opacity = '.4'; }, 300);
+  }, {passive:true});
+  card.addEventListener('touchend', async e => {
+    clearTimeout(touchTimer);
+    if (!dragLeadId) return;
+    const t = e.changedTouches[0];
+    const el = document.elementFromPoint(t.clientX, t.clientY);
+    const col = el?.closest('[data-col]');
+    const oldCol = getCurrentColOfLead(card.dataset.id);
+    if (col && col.dataset.col !== oldCol) {
+      await pipeMoveLead(card.dataset.id, col.dataset.col);
+    }
+    card.style.opacity = ''; dragLeadId = null;
+  });
+}
+
+function getCurrentColOfLead(id) {
+  for (const col of PIPE_COLS) {
+    if (document.querySelector(`#pcol-${col.key} [data-id="${id}"]`)) return col.key;
+  }
+  return null;
+}
+
+function pipeDragOver(e) {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  e.currentTarget.classList.add('drag-target');
+}
+
+async function pipeDrop(e, newStatus) {
+  e.preventDefault();
+  document.querySelectorAll('.pipe-col-body').forEach(b=>b.classList.remove('drag-target'));
+  if (!dragLeadId) return;
+  const oldCol = getCurrentColOfLead(dragLeadId);
+  if (oldCol === newStatus) return;
+  await pipeMoveLead(dragLeadId, newStatus);
+}
+
+async function pipeMoveLead(id, newStatus) {
+  await apiFetch('/api/leads/'+id, {method:'PUT', body:JSON.stringify({status:newStatus})});
+  toast('✅ סטאטוס עודכן');
+  loadPipeline();
+  loadToday();
+}
+
 </script>
 </body>
 </html>
