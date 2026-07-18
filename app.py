@@ -1542,6 +1542,17 @@ async def _teardown_webhook() -> None:
 #  FASTAPI APPLICATION
 # ─────────────────────────────────────────────────────────────────────────────
 
+def job_cleanup_sessions():
+    """Delete expired sessions nightly to prevent DB bloat."""
+    try:
+        with _db() as conn:
+            cur = conn.cursor()
+            cur.execute("DELETE FROM sessions WHERE expires_at < NOW()")
+            deleted = cur.rowcount
+        logger.info(f"Session cleanup: removed {deleted} expired session(s)")
+    except Exception as e:
+        logger.error(f"Session cleanup failed: {e}")
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     ensure_db()
@@ -1553,7 +1564,8 @@ async def lifespan(app: FastAPI):
 
     # Start scheduler in the uvicorn event loop (not a separate thread)
     scheduler = AsyncIOScheduler(timezone="Asia/Jerusalem")
-    scheduler.add_job(job_self_ping, "interval", minutes=4)
+    scheduler.add_job(job_self_ping,         "interval", minutes=4)
+    scheduler.add_job(job_cleanup_sessions,  "cron",     hour=3, minute=0)
     if _tg_app:
         scheduler.add_job(job_check_reminders,  "interval", minutes=1,                  args=[_tg_app])
         scheduler.add_job(job_morning_briefing, "cron",     hour=9,  minute=0,          args=[_tg_app])

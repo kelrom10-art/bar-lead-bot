@@ -311,7 +311,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
         </div>
         <div class="input-group">
           <span class="input-icon">🔒</span>
-          <input id="reg-password" type="password" class="login-input" placeholder="סיסמה (לפחות 6 תווים)" required>
+          <input id="reg-password" type="password" class="login-input" placeholder="סיסמה (לפחות 8 תווים)" required minlength="8">
         </div>
         <button type="submit" class="login-btn" id="reg-btn">הירשם 🎉</button>
       </form>
@@ -875,8 +875,8 @@ async function submitRegister(e) {
   btn.disabled=true; btn.textContent='נרשם...';
   document.getElementById('reg-error').textContent='';
   const password = document.getElementById('reg-password').value;
-  if (password.length<6) {
-    document.getElementById('reg-error').textContent='סיסמה חייבת להכיל לפחות 6 תווים';
+  if (password.length<8) {
+    document.getElementById('reg-error').textContent='סיסמה חייבת להכיל לפחות 8 תווים';
     btn.disabled=false; btn.textContent='הירשם 🎉'; return;
   }
   try {
@@ -1374,9 +1374,23 @@ function initSwipe(el, id) {
     setTimeout(()=>{el.style.transition='';},300);
   });
 }
-async function setStatusSwipe(id,status) {
-  await apiFetch('/api/leads/'+id,{method:'PUT',body:JSON.stringify({status})});
-  toast(status==='won'?'✅ נסגר!':'❌ אבד');
+let _swipeUndoPending = false;
+
+async function setStatusSwipe(id, status) {
+  if (status === 'lost') {
+    // 3-second undo window before committing to "lost"
+    _swipeUndoPending = true;
+    const toastEl = document.getElementById('toast');
+    toastEl.innerHTML = '❌ אבד &nbsp;<button onclick="_swipeUndoPending=false;document.getElementById(\'toast\').classList.remove(\'show\');loadLeads()" style="background:none;border:1px solid #4facff;border-radius:12px;padding:2px 10px;color:#4facff;font-weight:700;cursor:pointer;font-size:inherit;font-family:inherit;">↩ ביטול</button>';
+    toastEl.classList.add('show');
+    await new Promise(r => setTimeout(r, 3000));
+    toastEl.classList.remove('show');
+    toastEl.textContent = '';
+    if (!_swipeUndoPending) return; // user tapped undo
+    _swipeUndoPending = false;
+  }
+  await apiFetch('/api/leads/'+id, {method:'PUT', body:JSON.stringify({status})});
+  if (status === 'won') toast('✅ נסגר!');
   loadLeads(); loadToday();
 }
 
@@ -1550,10 +1564,17 @@ async function submitEdit(e) {
     source:   document.getElementById('edit-source').value,
     package:  document.getElementById('edit-package').value,
   };
-  const res=await apiFetch('/api/leads/'+currentLeadId,{method:'PUT',body:JSON.stringify(body)});
-  document.getElementById('edit-modal').classList.remove('open');
-  toast(res.ok?'✅ ליד עודכן!':'❌ שגיאה');
-  loadToday(); loadLeads();
+  const btn = e.target.querySelector('button[type=submit]');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ שומר...'; }
+  try {
+    const res=await apiFetch('/api/leads/'+currentLeadId,{method:'PUT',body:JSON.stringify(body)});
+    document.getElementById('edit-modal').classList.remove('open');
+    if (res.ok) { toast('✅ ליד עודכן!'); }
+    else { const err=await res.json().catch(()=>({})); toast('❌ '+(err.detail||'שגיאה')); }
+    loadToday(); loadLeads();
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '💾 שמור'; }
+  }
 }
 
 // ── ADD LEAD ───────────────────────────────────────────────────────────────
@@ -1576,7 +1597,10 @@ async function submitAdd(e) {
     document.querySelectorAll('#add-tags-row .tag-btn').forEach(b=>b.classList.remove('selected'));
     toast('🎯 ליד נוסף!');
     goTo('today',document.querySelector('.nav-btn'));
-  } else { toast('❌ שגיאה בהוספה'); }
+  } else {
+    const err=await res.json().catch(()=>({}));
+    toast('❌ '+(err.detail||'שגיאה בהוספה'));
+  }
 }
 
 // ── STATS ──────────────────────────────────────────────────────────────────
@@ -1799,17 +1823,28 @@ async function submitQuick(e) {
   const notes   = document.getElementById('q-notes').value.trim();
   const tags    = [..._qSelectedTags].join(',');
   if (!name || !phone) { toast('מלא שם וטלפון'); return; }
-  const body = { name, phone, call_time: fromLocalDatetime(time), source, package: pkg, notes, tags };
-  const res = await apiFetch('/api/leads', {method:'POST', body:JSON.stringify(body)});
-  if (res.ok) {
-    document.getElementById('quick-form').reset();
-    _qSelectedTags = new Set();
-    document.querySelectorAll('#q-tags-row .tag-btn').forEach(b=>b.classList.remove('selected'));
-    closeQuickAdd();
-    toast('🎯 ליד נוסף!');
-    if (document.getElementById('screen-leads').classList.contains('active')) loadLeads();
-    loadToday();
-  } else { toast('❌ שגיאה בהוספת ליד'); }
+  const btn = e.target.querySelector('button[type=submit]');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ שומר...'; }
+  try {
+    const body = { name, phone, call_time: fromLocalDatetime(time), source, package: pkg, notes, tags };
+    const res = await apiFetch('/api/leads', {method:'POST', body:JSON.stringify(body)});
+    if (res.ok) {
+      document.getElementById('quick-form').reset();
+      _qSelectedTags = new Set();
+      document.querySelectorAll('#q-tags-row .tag-btn').forEach(b=>b.classList.remove('selected'));
+      closeQuickAdd();
+      toast('🎯 ליד נוסף!');
+      if (document.getElementById('screen-leads').classList.contains('active')) loadLeads();
+      loadToday();
+    } else {
+      const err = await res.json().catch(()=>({}));
+      toast('❌ ' + (err.detail || 'שגיאה בהוספת ליד'));
+    }
+  } catch(ex) {
+    toast('❌ שגיאת חיבור');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🎯 הוסף ליד'; }
+  }
 }
 
 // ── PIPELINE VIEW ──────────────────────────────────────────────────────────
