@@ -441,11 +441,11 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
       <form id="add-form" onsubmit="submitAdd(event)">
         <div class="form-group">
           <label class="form-label">👤 שם לקוח *</label>
-          <input id="add-name" class="form-input" placeholder="שם מלא" required>
+          <input id="add-name" class="form-input" placeholder="שם מלא" required autocomplete="name">
         </div>
         <div class="form-group">
           <label class="form-label">📱 טלפון *</label>
-          <input id="add-phone" class="form-input" type="tel" placeholder="05X-XXXXXXX" required>
+          <input id="add-phone" class="form-input" type="tel" inputmode="tel" placeholder="05X-XXXXXXX" required autocomplete="tel">
         </div>
         <div class="form-group">
           <label class="form-label">📅 תאריך ושעת שיחה</label>
@@ -562,11 +562,11 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
     <form id="quick-form" onsubmit="submitQuick(event)">
       <div class="form-group">
         <label class="form-label">👤 שם *</label>
-        <input id="q-name" class="form-input" placeholder="שם מלא" required autocomplete="off">
+        <input id="q-name" class="form-input" placeholder="שם מלא" required autocomplete="name">
       </div>
       <div class="form-group">
         <label class="form-label">📱 טלפון *</label>
-        <input id="q-phone" class="form-input" type="tel" placeholder="05X-XXXXXXX" required>
+        <input id="q-phone" class="form-input" type="tel" inputmode="tel" placeholder="05X-XXXXXXX" required autocomplete="tel">
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
         <div class="form-group" style="margin-bottom:0">
@@ -637,11 +637,11 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
     <form onsubmit="submitEdit(event)">
       <div class="form-group">
         <label class="form-label">👤 שם</label>
-        <input id="edit-name" class="form-input" required>
+        <input id="edit-name" class="form-input" required autocomplete="name">
       </div>
       <div class="form-group">
         <label class="form-label">📱 טלפון</label>
-        <input id="edit-phone" class="form-input" type="tel" required>
+        <input id="edit-phone" class="form-input" type="tel" inputmode="tel" required autocomplete="tel">
       </div>
       <div class="form-group">
         <label class="form-label">📅 שעת שיחה</label>
@@ -844,6 +844,19 @@ function toggleUserMenu() {
 document.addEventListener('click', e => {
   if (!e.target.closest('#user-btn') && !e.target.closest('#user-dropdown'))
     document.getElementById('user-dropdown')?.classList.remove('open');
+});
+
+// ── Keyboard shortcut: + opens Quick Add ──────────────────────────────────
+document.addEventListener('keydown', e => {
+  // Only fire when no modal is open and no input/textarea is focused
+  if (e.key !== '+' && e.key !== '=') return;
+  const active = document.activeElement;
+  if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'SELECT')) return;
+  if (document.querySelector('.modal.open')) return;
+  const screen = document.querySelector('#app .screen.active');
+  if (!screen || !['screen-today','screen-leads'].includes(screen.id)) return;
+  e.preventDefault();
+  openQuickAdd();
 });
 
 // ── Auth ───────────────────────────────────────────────────────────────────
@@ -1259,7 +1272,7 @@ async function loadToday() {
             <div class="today-name">${esc(l.name)}</div>
             <div class="today-phone">${esc(l.phone)}${src?'&nbsp;'+src:''}</div>
           </div>
-          <a href="tel:${esc(l.phone)}" class="today-call" onclick="event.stopPropagation()" title="התקשר">📞</a>
+          <a href="tel:${esc(l.phone)}" class="today-call" onclick="event.stopPropagation()" title="התקשר" aria-label="התקשר ל-${esc(l.name)}">📞</a>
         </div>`;
       }
       html+='</div>';
