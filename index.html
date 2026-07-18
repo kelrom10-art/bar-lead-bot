@@ -214,7 +214,15 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
 /* ── QUICK-ADD MODAL ── */
 #quick-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:300;align-items:flex-end;justify-content:center}
 #quick-modal.open{display:flex}
-.quick-sheet{background:var(--card);border:1px solid var(--border);border-radius:22px 22px 0 0;padding:20px 20px calc(20px + var(--safe-bottom));width:100%;max-width:480px}
+.quick-sheet{background:var(--card);border:1px solid var(--border);border-radius:22px 22px 0 0;padding:20px 20px calc(20px + var(--safe-bottom));width:100%;max-width:480px;max-height:88vh;overflow-y:auto}
+/* ── ONBOARDING ── */
+.onboarding-card{background:linear-gradient(135deg,rgba(79,172,255,.12),rgba(138,43,226,.08));border:1px solid rgba(79,172,255,.25);border-radius:20px;padding:28px 20px;margin:16px 12px;text-align:center}
+.onboarding-card .ob-icon{font-size:52px;margin-bottom:12px}
+.onboarding-card h2{font-size:20px;font-weight:800;margin:0 0 8px;color:var(--text)}
+.onboarding-card p{font-size:14px;color:var(--text2);margin:0 0 20px;line-height:1.6}
+.ob-steps{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:20px;text-align:right}
+.ob-step{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:12px 10px;font-size:12px;color:var(--text2);line-height:1.5}
+.ob-step strong{display:block;font-size:13px;color:var(--text);margin-bottom:3px}
 .quick-sheet .modal-handle{width:36px;height:4px;background:var(--border);border-radius:2px;margin:0 auto 16px}
 .quick-title{font-size:17px;font-weight:800;margin-bottom:16px;text-align:center}
 /* ── PIPELINE VIEW ── */
@@ -547,7 +555,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
 <div id="quick-modal" onclick="if(event.target===this)closeQuickAdd()">
   <div class="quick-sheet">
     <div class="modal-handle"></div>
-    <div class="quick-title">⚡ הוסף ליד מהיר</div>
+    <div class="quick-title">➕ הוסף ליד חדש</div>
     <form id="quick-form" onsubmit="submitQuick(event)">
       <div class="form-group">
         <label class="form-label">👤 שם *</label>
@@ -557,9 +565,50 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
         <label class="form-label">📱 טלפון *</label>
         <input id="q-phone" class="form-input" type="tel" placeholder="05X-XXXXXXX" required>
       </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div class="form-group" style="margin-bottom:0">
+          <label class="form-label">📣 מקור</label>
+          <select id="q-source" class="form-select">
+            <option value="">— מקור —</option>
+            <option value="instagram">📸 אינסטגרם</option>
+            <option value="facebook">👤 פייסבוק</option>
+            <option value="tiktok">🎵 טיקטוק</option>
+            <option value="referral">🤝 המלצה</option>
+            <option value="website">🌐 אתר</option>
+            <option value="phone">📞 טלפון נכנס</option>
+            <option value="other">אחר</option>
+          </select>
+        </div>
+        <div class="form-group" style="margin-bottom:0">
+          <label class="form-label">📦 חבילה</label>
+          <select id="q-package" class="form-select">
+            <option value="">— חבילה —</option>
+            <option value="basic">בסיסי</option>
+            <option value="standard">סטנדרט</option>
+            <option value="premium">פרמיום ⭐</option>
+            <option value="vip">VIP 👑</option>
+            <option value="custom">מותאם</option>
+          </select>
+        </div>
+      </div>
       <div class="form-group">
         <label class="form-label">📅 זמן שיחה</label>
         <input id="q-time" class="form-input" type="datetime-local">
+      </div>
+      <div class="form-group">
+        <label class="form-label">📝 הערות</label>
+        <textarea id="q-notes" class="form-input" rows="2" style="resize:none" placeholder="פרטים נוספים..."></textarea>
+      </div>
+      <div class="form-group">
+        <label class="form-label">🏷️ תגיות (אופציונלי)</label>
+        <div class="tags-row" id="q-tags-row">
+          <button type="button" class="tag-btn" data-tag="חתונה">💍 חתונה</button>
+          <button type="button" class="tag-btn" data-tag="בר מצווה">🎊 בר מצווה</button>
+          <button type="button" class="tag-btn" data-tag="בת מצווה">🎀 בת מצווה</button>
+          <button type="button" class="tag-btn" data-tag="מסיבה">🎉 מסיבה</button>
+          <button type="button" class="tag-btn" data-tag="ברית">🍼 ברית</button>
+          <button type="button" class="tag-btn" data-tag="אחר">אחר</button>
+        </div>
       </div>
       <button type="submit" class="btn btn-full" style="background:linear-gradient(135deg,var(--accent),#c2185b);color:#fff;font-size:15px;padding:13px;margin-top:4px">
         🎯 הוסף ליד
@@ -1178,7 +1227,24 @@ async function loadToday() {
       </div>
     </div>`;
 
-    if (active.length) {
+    // ── ONBOARDING ── show when account has no leads yet
+    if ((stats.total||0) === 0) {
+      html+=`
+      <div class="onboarding-card">
+        <div class="ob-icon">🚀</div>
+        <h2>ברוך הבא לBar Lead Bot!</h2>
+        <p>הכל מוכן. הוסף את הליד הראשון שלך עכשיו ותתחיל לעקוב אחר הפייפליין שלך.</p>
+        <div class="ob-steps">
+          <div class="ob-step"><strong>1. הוסף ליד ➕</strong>לחץ על כפתור "הוסף" למטה</div>
+          <div class="ob-step"><strong>2. קבע שיחה 📅</strong>הגדר תאריך ושעת יצירת קשר</div>
+          <div class="ob-step"><strong>3. עקוב אחר סטאטוס 📊</strong>עדכן אם דיברת, נסגר, אבד</div>
+          <div class="ob-step"><strong>4. ראה ביצועים 📈</strong>מעקב המרות בלשונית סטטיסטיקה</div>
+        </div>
+        <button class="btn btn-blue" onclick="openQuickAdd()" style="width:100%;padding:16px;font-size:16px;font-weight:700">
+          ➕ הוסף ליד ראשון
+        </button>
+      </div>`;
+    } else if (active.length) {
       html+=`<div class="section-title" style="padding:0 12px">📅 שיחות היום (${active.length})</div><div class="today-list">`;
       for (const l of active) {
         const dt  = l.call_time ? new Date(l.call_time) : null;
@@ -1195,7 +1261,7 @@ async function loadToday() {
       }
       html+='</div>';
     } else {
-      html+=`<div class="empty" style="padding:40px 20px"><div class="empty-icon">✅</div><div>אין שיחות היום</div></div>`;
+      html+=`<div class="empty" style="padding:40px 20px"><div class="empty-icon">✅</div><div>אין שיחות היום — כל הכבוד!</div></div>`;
     }
 
     if (done.length) {
@@ -1378,7 +1444,7 @@ async function openLead(id) {
       <div id="status-btns">
         <div class="btn-row" style="margin-bottom:8px">
           <button class="btn btn-green" onclick="promptWon('${id}')" style="flex:1;padding:14px 8px;font-size:15px">✅ נסגר</button>
-          <button class="btn btn-red" onclick="setStatus('${id}','lost')" style="flex:1;padding:14px 8px;font-size:15px">❌ אבד</button>
+          <button class="btn btn-red" onclick="confirmLost('${id}')" style="flex:1;padding:14px 8px;font-size:15px">❌ אבד</button>
         </div>
         <div class="btn-row" style="margin-bottom:8px">
           <button class="btn btn-yellow" onclick="setStatus('${id}','called')" style="flex:1;padding:14px 8px;font-size:15px">📞 דיבר</button>
@@ -1434,6 +1500,10 @@ async function setStatus(id,status) {
   toast('✅ סטאטוס עודכן!');
   document.getElementById('lead-modal').classList.remove('open');
   loadToday(); loadLeads();
+}
+function confirmLost(id) {
+  if (!confirm('לסמן ליד זה כ"אבד"?\nלא ניתן לשחזר בקלות.')) return;
+  setStatus(id,'lost');
 }
 async function saveAmount(id) {
   const amt=document.getElementById('won-amount').value;
@@ -1695,6 +1765,8 @@ if ('serviceWorker' in navigator) {
 initApp();
 
 // ── QUICK ADD FAB ──────────────────────────────────────────────────────────
+let _qSelectedTags = new Set();
+
 function openQuickAdd() {
   // pre-fill datetime to now + 1h rounded to nearest 30 min
   const d = new Date();
@@ -1702,6 +1774,15 @@ function openQuickAdd() {
   const pad = n => String(n).padStart(2,'0');
   document.getElementById('q-time').value =
     `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  // reset tags
+  _qSelectedTags = new Set();
+  document.querySelectorAll('#q-tags-row .tag-btn').forEach(b => {
+    b.classList.remove('selected');
+    b.onclick = () => {
+      b.classList.toggle('selected');
+      _qSelectedTags.has(b.dataset.tag) ? _qSelectedTags.delete(b.dataset.tag) : _qSelectedTags.add(b.dataset.tag);
+    };
+  });
   document.getElementById('quick-modal').classList.add('open');
   setTimeout(() => document.getElementById('q-name')?.focus(), 120);
 }
@@ -1710,19 +1791,25 @@ function closeQuickAdd() {
 }
 async function submitQuick(e) {
   e.preventDefault();
-  const name  = document.getElementById('q-name').value.trim();
-  const phone = document.getElementById('q-phone').value.trim();
-  const time  = document.getElementById('q-time').value;
+  const name    = document.getElementById('q-name').value.trim();
+  const phone   = document.getElementById('q-phone').value.trim();
+  const time    = document.getElementById('q-time').value;
+  const source  = document.getElementById('q-source').value;
+  const pkg     = document.getElementById('q-package').value;
+  const notes   = document.getElementById('q-notes').value.trim();
+  const tags    = [..._qSelectedTags].join(',');
   if (!name || !phone) { toast('מלא שם וטלפון'); return; }
-  const body = { name, phone, call_time: fromLocalDatetime(time) };
+  const body = { name, phone, call_time: fromLocalDatetime(time), source, package: pkg, notes, tags };
   const res = await apiFetch('/api/leads', {method:'POST', body:JSON.stringify(body)});
   if (res.ok) {
     document.getElementById('quick-form').reset();
+    _qSelectedTags = new Set();
+    document.querySelectorAll('#q-tags-row .tag-btn').forEach(b=>b.classList.remove('selected'));
     closeQuickAdd();
     toast('🎯 ליד נוסף!');
     if (document.getElementById('screen-leads').classList.contains('active')) loadLeads();
     loadToday();
-  } else { toast('❌ שגיאה'); }
+  } else { toast('❌ שגיאה בהוספת ליד'); }
 }
 
 // ── PIPELINE VIEW ──────────────────────────────────────────────────────────

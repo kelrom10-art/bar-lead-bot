@@ -20,7 +20,7 @@ Optional environment variables:
 """
 
 import asyncio, base64, csv, hashlib, hmac as _hmac, io, json, logging, os
-import secrets, smtplib, threading, uuid
+import secrets, smtplib, threading, time, uuid
 from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
@@ -1615,7 +1615,7 @@ class LeadUpdate(BaseModel):
 
 class RegisterRequest(BaseModel):
     username:     str = Field(..., min_length=3, max_length=50)
-    password:     str = Field(..., min_length=6)
+    password:     str = Field(..., min_length=8)
     display_name: Optional[str] = ""
 
 class LoginRequest(BaseModel):
@@ -1628,7 +1628,7 @@ class ForgotPasswordRequest(BaseModel):
 class ResetPasswordRequest(BaseModel):
     username:     str
     code:         str
-    new_password: str = Field(..., min_length=6)
+    new_password: str = Field(..., min_length=8)
 
 class PushSubscribeRequest(BaseModel):
     subscription: dict
@@ -1669,8 +1669,37 @@ def app_config():
         "open_registration": OPEN_REGISTRATION,
     }
 
+# ── RATE LIMITER (in-memory, IP-based) ────────────────────────────────────
+_rate_limit_store: dict[str, list[float]] = {}
+_rate_limit_lock = threading.Lock()
+_RATE_LIMIT_MAX     = 5    # max attempts
+_RATE_LIMIT_WINDOW  = 900  # 15 minutes in seconds
+
+def _check_rate_limit(request: Request) -> None:
+    """Raise HTTP 429 if IP has exceeded login/register attempts."""
+    ip = request.client.host if request.client else "unknown"
+    now = time.time()
+    with _rate_limit_lock:
+        attempts = _rate_limit_store.get(ip, [])
+        # Keep only attempts within the window
+        attempts = [t for t in attempts if now - t < _RATE_LIMIT_WINDOW]
+        if len(attempts) >= _RATE_LIMIT_MAX:
+            wait = int(_RATE_LIMIT_WINDOW - (now - attempts[0]))
+            raise HTTPException(
+                status_code=429,
+                detail=f"יותר מדי ניסיונות כניסה. נסה שוב בעוד {wait} שניות."
+            )
+        attempts.append(now)
+        _rate_limit_store[ip] = attempts
+
+def _clear_rate_limit(ip: str) -> None:
+    """Clear attempts after successful auth."""
+    with _rate_limit_lock:
+        _rate_limit_store.pop(ip, None)
+
 @fastapi_app.post("/api/auth/register", status_code=201)
-def register(body: RegisterRequest):
+def register(body: RegisterRequest, request: Request):
+    _check_rate_limit(request)
     if not OPEN_REGISTRATION and db_count_users() > 0:
         raise HTTPException(403, "הרשמה סגורה — פנה למנהל המערכת")
     if db_get_user_by_username(body.username):
@@ -1678,13 +1707,16 @@ def register(body: RegisterRequest):
     uid   = db_create_user(body.username.strip(), body.password, body.display_name or body.username)
     token = db_create_session(uid)
     user  = db_get_user_by_token(token)
+    _clear_rate_limit(request.client.host if request.client else "unknown")
     return {"token": token, "user": user}
 
 @fastapi_app.post("/api/auth/login")
-def login(body: LoginRequest):
+def login(body: LoginRequest, request: Request):
+    _check_rate_limit(request)
     user = db_get_user_by_username(body.username.strip())
     if not user or not verify_password(body.password, user["password_hash"]):
         raise HTTPException(401, "שם משתמש או סיסמה שגויים")
+    _clear_rate_limit(request.client.host if request.client else "unknown")
     token = db_create_session(user["id"])
     return {
         "token": token,
