@@ -219,20 +219,24 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
 .quick-title{font-size:17px;font-weight:800;margin-bottom:16px;text-align:center}
 /* ── PIPELINE VIEW ── */
 .view-toggle{display:flex;gap:6px;padding:0 12px 10px}
-.view-btn{flex:1;padding:7px 0;border:1px solid var(--border);border-radius:20px;background:rgba(255,255,255,.06);color:var(--text2);font-size:12px;font-weight:600;cursor:pointer;transition:all .15s}
+.view-btn{flex:1;padding:8px 0;border:1px solid var(--border);border-radius:20px;background:rgba(255,255,255,.06);color:var(--text2);font-size:13px;font-weight:600;cursor:pointer;transition:all .15s}
 .view-btn.active{background:var(--accent);border-color:var(--accent);color:#fff}
-#pipeline-view{display:none;padding:0 10px 80px;overflow-x:auto;scrollbar-width:none}
+#pipeline-view{display:none;padding:0 10px calc(var(--nav-h) + var(--safe-bottom) + 20px);overflow-x:auto;scrollbar-width:none;scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch}
 #pipeline-view::-webkit-scrollbar{display:none}
 #pipeline-view.visible{display:flex;gap:10px}
-.pipe-col{flex:0 0 180px;display:flex;flex-direction:column;gap:8px}
-.pipe-col-header{background:rgba(255,255,255,.06);border:1px solid var(--border);border-radius:12px;padding:8px 12px;text-align:center;font-size:12px;font-weight:700;position:sticky;top:0}
-.pipe-col-body{display:flex;flex-direction:column;gap:6px;min-height:120px}
-.pipe-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:10px 12px;cursor:pointer;transition:transform .15s,box-shadow .15s;touch-action:none}
-.pipe-card:active{transform:scale(.97)}
+.pipe-col{flex:0 0 calc(50vw - 10px);display:flex;flex-direction:column;gap:8px;scroll-snap-align:start}
+.pipe-col-header{background:rgba(255,255,255,.07);border:1px solid var(--border);border-radius:14px;padding:10px 12px;text-align:center;font-size:13px;font-weight:700;position:sticky;top:0;z-index:2}
+.pipe-col-body{display:flex;flex-direction:column;gap:6px;min-height:80px}
+.pipe-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:12px 12px 8px;cursor:pointer;transition:box-shadow .15s;touch-action:auto}
+.pipe-card:active{background:var(--card2)}
 .pipe-card.drag-over-col{box-shadow:0 0 0 2px var(--accent)}
-.pipe-card-name{font-size:13px;font-weight:700;margin-bottom:3px}
-.pipe-card-phone{font-size:11px;color:var(--text2)}
-.pipe-card-time{font-size:10px;color:var(--text3);margin-top:4px}
+.pipe-card-name{font-size:14px;font-weight:700;margin-bottom:3px}
+.pipe-card-phone{font-size:12px;color:var(--text2)}
+.pipe-card-time{font-size:11px;color:var(--text3);margin-top:4px}
+.pipe-card-actions{display:flex;gap:4px;margin-top:8px}
+.pipe-move-btn{flex:1;background:rgba(255,255,255,.06);border:1px solid var(--border);border-radius:8px;padding:6px 4px;font-size:11px;color:var(--text2);cursor:pointer;font-family:inherit;transition:all .15s;min-height:32px;display:flex;align-items:center;justify-content:center}
+.pipe-move-btn:active{background:rgba(255,255,255,.14);color:var(--text)}
+.pipe-move-btn:disabled{opacity:.25;pointer-events:none}
 .pipe-col-body.drag-target{border:2px dashed var(--accent);border-radius:10px;background:rgba(232,65,90,.05)}
 
 /* ── NOTIF BANNER ── */
@@ -240,6 +244,13 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
 #notif-banner.show{display:flex}
 .notif-banner-text{flex:1;font-size:13px;font-weight:600;color:#ffcce8;line-height:1.35}
 .notif-banner-btn{background:var(--accent);border:none;color:#fff;padding:7px 14px;border-radius:20px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;flex-shrink:0}
+/* ── EXTRA ── */
+.btn-blue{background:rgba(79,172,255,.18);color:var(--blue);border:1px solid rgba(79,172,255,.25)}
+.swipe-hint-bar{text-align:center;padding:2px 12px 8px;font-size:11px;color:var(--text3);letter-spacing:.2px}
+.src-toggle-btn{background:rgba(255,255,255,.06);border:1px solid var(--border);border-radius:8px;padding:4px 10px;font-size:11px;color:var(--text2);cursor:pointer;font-family:inherit;white-space:nowrap;flex-shrink:0}
+.src-toggle-btn.active{border-color:var(--blue);color:var(--blue);background:rgba(79,172,255,.1)}
+.today-call{text-decoration:none;background:rgba(0,212,160,.15);color:var(--green);border:1px solid rgba(0,212,160,.25);border-radius:50%;width:40px;height:40px;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0}
+.today-call:active{background:rgba(0,212,160,.3)}
 </style>
 </head>
 <body>
@@ -387,7 +398,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
       <div class="filter-tab" data-status="lost" onclick="setFilter('lost')">❌ אבד</div>
       <div class="filter-tab" data-status="old" onclick="setFilter('old')">📁 ישן</div>
     </div>
-    <div class="source-filter" id="source-filter">
+    <div class="source-filter" id="source-filter" style="display:none">
       <div class="source-tab active" data-src="" onclick="setSourceFilter('')">כל המקורות</div>
       <div class="source-tab" data-src="instagram" onclick="setSourceFilter('instagram')">📸 אינסטגרם</div>
       <div class="source-tab" data-src="facebook" onclick="setSourceFilter('facebook')">👤 פייסבוק</div>
@@ -401,7 +412,9 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
       <button class="sort-btn active" id="sort-time" onclick="setSort('time')">⏰ זמן</button>
       <button class="sort-btn" id="sort-name" onclick="setSort('name')">א-ב שם</button>
       <button class="sort-btn" id="sort-amount" onclick="setSort('amount')">💰 סכום</button>
+      <button class="src-toggle-btn" id="src-toggle-btn" onclick="toggleSourceFilter()">מקור</button>
     </div>
+    <div class="swipe-hint-bar" id="swipe-hint" style="display:none">← החלק ליד שמאל=אבד | ימין=נסגר →</div>
     <div class="view-toggle">
       <button class="view-btn active" id="vbtn-list" onclick="switchView('list')">☰ רשימה</button>
       <button class="view-btn" id="vbtn-pipe" onclick="switchView('pipe')">▦ פייפליין</button>
@@ -515,7 +528,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
     <button class="nav-btn" onclick="goTo('leads',this)">
       <span class="nav-icon">📋</span><span class="nav-label">לידים</span>
     </button>
-    <button class="nav-btn" onclick="goTo('add',this)">
+    <button class="nav-btn" id="nav-add-btn" onclick="openQuickAdd()">
       <span class="nav-icon">➕</span><span class="nav-label">הוסף</span>
     </button>
     <button class="nav-btn" onclick="goTo('stats',this)">
@@ -754,6 +767,9 @@ function goTo(name, btn) {
   document.getElementById(`screen-${name}`)?.classList.add('active');
   if (btn) btn.classList.add('active');
   document.getElementById('user-dropdown')?.classList.remove('open');
+  // FAB: only show on today and leads
+  const fab = document.querySelector('.fab');
+  if (fab) fab.style.display = ['today','leads'].includes(name) ? '' : 'none';
   if (name==='today')    loadToday();
   if (name==='leads')    loadLeads();
   if (name==='stats')    loadStats();
@@ -1174,7 +1190,7 @@ async function loadToday() {
             <div class="today-name">${esc(l.name)}</div>
             <div class="today-phone">${esc(l.phone)}${src?'&nbsp;'+src:''}</div>
           </div>
-          <span class="badge ${badgeClass(l.status)}">${l.status_emoji}</span>
+          <a href="tel:${esc(l.phone)}" class="today-call" onclick="event.stopPropagation()" title="התקשר">📞</a>
         </div>`;
       }
       html+='</div>';
@@ -1360,13 +1376,14 @@ async function openLead(id) {
       ${amtHtml}
       <div class="section-title">עדכון סטאטוס</div>
       <div id="status-btns">
-        <div class="btn-row" style="margin-bottom:10px">
-          <button class="btn btn-green btn-sm" onclick="promptWon('${id}')" style="flex:1">✅ נסגר</button>
-          <button class="btn btn-red btn-sm" onclick="setStatus('${id}','lost')" style="flex:1">❌ אבד</button>
+        <div class="btn-row" style="margin-bottom:8px">
+          <button class="btn btn-green" onclick="promptWon('${id}')" style="flex:1;padding:14px 8px;font-size:15px">✅ נסגר</button>
+          <button class="btn btn-red" onclick="setStatus('${id}','lost')" style="flex:1;padding:14px 8px;font-size:15px">❌ אבד</button>
         </div>
-        <div class="btn-row" style="margin-bottom:10px">
-          <button class="btn btn-yellow btn-sm" onclick="setStatus('${id}','follow_up')" style="flex:1">🔄 המשך טיפול</button>
-          <button class="btn btn-gray btn-sm" onclick="setStatus('${id}','old')" style="flex:1">📁 ישן</button>
+        <div class="btn-row" style="margin-bottom:8px">
+          <button class="btn btn-yellow" onclick="setStatus('${id}','called')" style="flex:1;padding:14px 8px;font-size:15px">📞 דיבר</button>
+          <button class="btn btn-yellow" onclick="setStatus('${id}','follow_up')" style="flex:1;padding:14px 8px;font-size:15px">🔄 המשך</button>
+          <button class="btn btn-gray" onclick="setStatus('${id}','old')" style="flex:1;padding:14px 8px;font-size:14px">📁 ישן</button>
         </div>
       </div>
       <div id="won-prompt-area"></div>
@@ -1711,22 +1728,25 @@ async function submitQuick(e) {
 // ── PIPELINE VIEW ──────────────────────────────────────────────────────────
 let pipeView = 'list'; // 'list' | 'pipe'
 const PIPE_COLS = [
-  { key:'new',       label:'🆕 חדש',      color:'var(--blue)' },
-  { key:'called',    label:'📞 קשר',      color:'var(--purple)' },
-  { key:'follow_up', label:'🔄 follow-up', color:'var(--accent)' },
-  { key:'won',       label:'✅ נסגר',     color:'var(--green)' },
+  { key:'new',       label:'🆕 חדש',       color:'var(--blue)' },
+  { key:'called',    label:'📞 דיבר',      color:'var(--purple)' },
+  { key:'follow_up', label:'🔄 המשך',      color:'var(--accent)' },
+  { key:'won',       label:'✅ נסגר',      color:'var(--green)' },
 ];
 
 function switchView(v) {
   pipeView = v;
   document.getElementById('vbtn-list').classList.toggle('active', v==='list');
   document.getElementById('vbtn-pipe').classList.toggle('active', v==='pipe');
-  document.getElementById('leads-list').style.display  = v==='list' ? '' : 'none';
+  document.getElementById('leads-list').style.display   = v==='list' ? '' : 'none';
   document.getElementById('pipeline-view').classList.toggle('visible', v==='pipe');
-  // hide/show filter & sort rows when in pipe mode
+  // hide filter rows in pipe mode
   document.getElementById('filter-tabs').style.display  = v==='pipe' ? 'none' : '';
-  document.getElementById('source-filter').style.display= v==='pipe' ? 'none' : '';
+  document.getElementById('source-filter').style.display= 'none'; // always collapsed
   document.querySelector('.sort-row').style.display      = v==='pipe' ? 'none' : '';
+  // swipe hint only in list view
+  const hint = document.getElementById('swipe-hint');
+  if (hint) hint.style.display = v==='list' ? 'block' : 'none';
   if (v==='pipe') loadPipeline();
 }
 
@@ -1763,10 +1783,20 @@ async function loadPipeline() {
 function renderPipeCard(l) {
   const dt = l.call_time ? new Date(l.call_time) : null;
   const tStr = dt ? `📅 ${dt.toLocaleDateString('he-IL',{day:'2-digit',month:'2-digit'})} ${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}` : '';
-  return `<div class="pipe-card" draggable="true" data-id="${l.id}" onclick="openLead('${l.id}')">
+  const colIdx = PIPE_COLS.findIndex(c => c.key === (l.status==='pre_reminded'?'new':l.status));
+  const idx = colIdx >= 0 ? colIdx : 0;
+  const canPrev = idx > 0;
+  const canNext = idx < PIPE_COLS.length - 1;
+  const prevLbl = canPrev ? `◀ ${PIPE_COLS[idx-1].label.replace(/^\S+\s/,'')}` : '◀';
+  const nextLbl = canNext ? `${PIPE_COLS[idx+1].label.replace(/^\S+\s/,'')} ▶` : '▶';
+  return `<div class="pipe-card" draggable="true" data-id="${l.id}" data-colidx="${idx}" onclick="openLead('${l.id}')">
     <div class="pipe-card-name">${esc(l.name)}</div>
     <div class="pipe-card-phone">${esc(l.phone)}</div>
     ${tStr ? `<div class="pipe-card-time">${tStr}</div>` : ''}
+    <div class="pipe-card-actions">
+      <button class="pipe-move-btn" ${canPrev?'':'disabled'} onclick="event.stopPropagation();pipeMoveCard('${l.id}',${idx-1})">${prevLbl}</button>
+      <button class="pipe-move-btn" ${canNext?'':'disabled'} onclick="event.stopPropagation();pipeMoveCard('${l.id}',${idx+1})">${nextLbl}</button>
+    </div>
   </div>`;
 }
 
@@ -1824,6 +1854,20 @@ async function pipeMoveLead(id, newStatus) {
   toast('✅ סטאטוס עודכן');
   loadPipeline();
   loadToday();
+}
+
+async function pipeMoveCard(id, newColIdx) {
+  if (newColIdx < 0 || newColIdx >= PIPE_COLS.length) return;
+  await pipeMoveLead(id, PIPE_COLS[newColIdx].key);
+}
+
+function toggleSourceFilter() {
+  const sf = document.getElementById('source-filter');
+  const btn = document.getElementById('src-toggle-btn');
+  if (!sf || !btn) return;
+  const isOpen = sf.style.display !== 'none';
+  sf.style.display = isOpen ? 'none' : 'flex';
+  btn.classList.toggle('active', !isOpen);
 }
 
 </script>
