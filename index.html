@@ -390,7 +390,10 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
   <div id="screen-leads" class="screen">
     <div class="screen-header">
       <span>📋 לידים</span>
-      <button class="btn btn-gray btn-sm" onclick="importCSV()">📥 יבוא CSV</button>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-gray btn-sm" onclick="importCSV()">📥 יבוא</button>
+        <button class="btn btn-gray btn-sm" onclick="exportExcel()">📤 יצוא</button>
+      </div>
     </div>
     <div class="search-bar">
       <input id="search-input" class="search-input" placeholder="🔍 חפש שם או טלפון..." oninput="onSearch(this.value)">
@@ -1321,7 +1324,19 @@ async function loadLeads() {
     if (currentSort==='name') leads.sort((a,b)=>(a.name||'').localeCompare(b.name||'','he'));
     else if (currentSort==='amount') leads.sort((a,b)=>(b.sale_amount||0)-(a.sale_amount||0));
     if (!leads.length) {
-      document.getElementById('leads-list').innerHTML='<div class="empty"><div class="empty-icon">🔍</div><div>לא נמצאו לידים</div></div>';
+      const ST_LBL = {new:'חדשים',pre_reminded:'בתזכורת',called:'דיברו',follow_up:'המשך',won:'נסגרו',lost:'אבדו',old:'ישנים'};
+      let icon, msg, action='';
+      if (currentSearch) {
+        icon='🔍'; msg=`לא נמצאו לידים עבור "<strong>${esc(currentSearch)}</strong>"`;
+        action=`<button onclick="clearSearch()" style="margin-top:14px;background:rgba(255,255,255,.08);border:1px solid var(--border);border-radius:20px;padding:8px 20px;color:var(--text2);font-size:13px;cursor:pointer;font-family:inherit">✕ נקה חיפוש</button>`;
+      } else if (currentFilter) {
+        icon='📋'; msg=`אין לידים בסטאטוס "${ST_LBL[currentFilter]||currentFilter}"`;
+        action=`<button onclick="setFilter('')" style="margin-top:14px;background:rgba(255,255,255,.08);border:1px solid var(--border);border-radius:20px;padding:8px 20px;color:var(--text2);font-size:13px;cursor:pointer;font-family:inherit">הצג הכל</button>`;
+      } else {
+        icon='➕'; msg='אין לידים עדיין — הוסף את הראשון!';
+        action=`<button onclick="openQuickAdd()" style="margin-top:14px;background:var(--accent);border:none;border-radius:20px;padding:10px 24px;color:#fff;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit">➕ הוסף ליד</button>`;
+      }
+      document.getElementById('leads-list').innerHTML=`<div class="empty" style="padding:52px 20px"><div class="empty-icon">${icon}</div><div>${msg}</div>${action}</div>`;
       return;
     }
     document.getElementById('leads-list').innerHTML=leads.map(l=>{
@@ -1389,9 +1404,32 @@ async function setStatusSwipe(id, status) {
     if (!_swipeUndoPending) return; // user tapped undo
     _swipeUndoPending = false;
   }
-  await apiFetch('/api/leads/'+id, {method:'PUT', body:JSON.stringify({status})});
-  if (status === 'won') toast('✅ נסגר!');
-  loadLeads(); loadToday();
+  try {
+    const res = await apiFetch('/api/leads/'+id, {method:'PUT', body:JSON.stringify({status})});
+    if (!res.ok) { toast('❌ שגיאה בעדכון'); loadLeads(); return; }
+    if (status === 'won') toast('✅ נסגר!');
+    loadLeads(); loadToday();
+  } catch(e) {
+    toast('❌ שגיאת חיבור'); loadLeads();
+  }
+}
+
+// ── EXPORT ─────────────────────────────────────────────────────────────────
+async function exportExcel() {
+  toast('⏳ מכין קובץ Excel...');
+  try {
+    const res = await apiFetch('/api/export/excel');
+    if (!res.ok) { toast('❌ שגיאה בייצוא'); return; }
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `leads_${new Date().toLocaleDateString('he-IL').replace(/\./g,'-')}.xlsx`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    toast('✅ הקובץ הורד!');
+  } catch(e) {
+    toast('❌ שגיאת חיבור');
+  }
 }
 
 // ── CSV IMPORT ─────────────────────────────────────────────────────────────
