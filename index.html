@@ -846,13 +846,24 @@ document.addEventListener('click', e => {
     document.getElementById('user-dropdown')?.classList.remove('open');
 });
 
-// ── Keyboard shortcut: + opens Quick Add ──────────────────────────────────
+// ── Keyboard shortcuts ─────────────────────────────────────────────────────
 document.addEventListener('keydown', e => {
-  // Only fire when no modal is open and no input/textarea is focused
+  // Escape closes any open modal
+  if (e.key === 'Escape') {
+    if (document.getElementById('quick-modal')?.classList.contains('open')) { closeQuickAdd(); return; }
+    const editM = document.getElementById('edit-modal');
+    if (editM?.classList.contains('open')) { editM.classList.remove('open'); return; }
+    const leadM = document.getElementById('lead-modal');
+    if (leadM?.classList.contains('open')) { leadM.classList.remove('open'); return; }
+    const notifM = document.getElementById('notif-modal');
+    if (notifM && notifM.style.display !== 'none' && notifM.style.display !== '') { closeNotifModal(); return; }
+    return;
+  }
+  // + opens Quick Add (when no modal open, no input focused, on today/leads)
   if (e.key !== '+' && e.key !== '=') return;
   const active = document.activeElement;
   if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'SELECT')) return;
-  if (document.querySelector('.modal.open')) return;
+  if (document.querySelector('.modal-overlay.open, #quick-modal.open')) return;
   const screen = document.querySelector('#app .screen.active');
   if (!screen || !['screen-today','screen-leads'].includes(screen.id)) return;
   e.preventDefault();
