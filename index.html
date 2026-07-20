@@ -757,6 +757,26 @@ function fromLocalDatetime(s) {
   return s ? (s.length===16 ? s+':00' : s) : null;
 }
 
+// Relative time hint, e.g. "בעוד 30 דק׳" / "לפני שעה" / "עכשיו"
+function relTime(dateObj) {
+  if (!dateObj) return '';
+  const diffMs = dateObj.getTime() - Date.now();
+  const past = diffMs < 0;
+  const mins = Math.round(Math.abs(diffMs) / 60000);
+  let txt;
+  if (mins < 1)       txt = 'עכשיו';
+  else if (mins < 60) txt = `${mins} דק׳`;
+  else if (mins < 60*24) {
+    const h = Math.round(mins/60);
+    txt = h === 1 ? 'שעה' : `${h} שעות`;
+  } else {
+    const d = Math.round(mins/(60*24));
+    txt = d === 1 ? 'יום' : `${d} ימים`;
+  }
+  if (mins < 1) return txt;
+  return past ? `לפני ${txt}` : `בעוד ${txt}`;
+}
+
 function fmtDT(s) {
   if (!s) return '';
   try {
@@ -1290,15 +1310,28 @@ async function loadToday() {
         </button>
       </div>`;
     } else if (active.length) {
+      // Sort chronologically by call time (no-time items last)
+      active.sort((a,b)=>{
+        const ta=a.call_time?new Date(a.call_time).getTime():Infinity;
+        const tb=b.call_time?new Date(b.call_time).getTime():Infinity;
+        return ta-tb;
+      });
+      const overdueCount = active.filter(l=>l.call_time && new Date(l.call_time).getTime() < Date.now()).length;
+      if (overdueCount) {
+        html+=`<div style="margin:0 12px 10px;background:rgba(229,72,77,.12);border:1px solid rgba(229,72,77,.35);border-radius:12px;padding:10px 14px;color:var(--red);font-size:13px;font-weight:700">⏰ ${overdueCount} ${overdueCount===1?'שיחה שעבר זמנה':'שיחות שעבר זמנן'} — כדאי לחזור אליהן</div>`;
+      }
       html+=`<div class="section-title" style="padding:0 12px">📅 שיחות היום (${active.length})</div><div class="today-list">`;
       for (const l of active) {
         const dt  = l.call_time ? new Date(l.call_time) : null;
         const tStr= dt ? `${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}` : '—';
+        const overdue = dt && dt.getTime() < Date.now();
+        const timeColor = overdue ? 'var(--red)' : (ST_COLOR[l.status]||'var(--text)');
+        const rel = dt ? `<span style="font-size:10px;color:${overdue?'var(--red)':'var(--text2)'};font-weight:600">${relTime(dt)}</span>` : '';
         const src = l.source ? `<span class="source-chip" style="margin-right:4px">${SRC_EMO[l.source]||''} ${SRC_LBL[l.source]||l.source}</span>` : '';
-        html+=`<div class="today-item" onclick="openLead('${l.id}')">
-          <div class="today-time" style="color:${ST_COLOR[l.status]||'var(--text)'}">${tStr}</div>
+        html+=`<div class="today-item${overdue?' overdue':''}" onclick="openLead('${l.id}')"${overdue?' style="border-right:3px solid var(--red)"':''}>
+          <div class="today-time" style="color:${timeColor};display:flex;flex-direction:column;align-items:center;gap:1px">${tStr}${rel}</div>
           <div class="today-info">
-            <div class="today-name">${esc(l.name)}</div>
+            <div class="today-name">${esc(l.name)}${overdue?' <span style="font-size:10px;color:var(--red);font-weight:700">⏰ עבר הזמן</span>':''}</div>
             <div class="today-phone">${esc(l.phone)}${src?'&nbsp;'+src:''}</div>
           </div>
           <a href="${waLink(l.phone)}" target="_blank" class="today-call" onclick="event.stopPropagation()" title="WhatsApp" aria-label="וואטסאפ ל-${esc(l.name)}" style="margin-left:4px">💬</a>
