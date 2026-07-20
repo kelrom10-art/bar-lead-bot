@@ -809,6 +809,28 @@ def db_source_counts(user_id: Optional[str] = None) -> dict:
             )
         return {row[0]: row[1] for row in cur.fetchall()}
 
+def db_source_conversion(user_id: Optional[str] = None) -> dict:
+    """Per-source totals and won counts, for conversion-rate analysis."""
+    with _db() as conn:
+        cur = conn.cursor()
+        if user_id:
+            cur.execute(
+                "SELECT COALESCE(NULLIF(source,''),'other') AS src, "
+                "COUNT(*) AS total, "
+                "COUNT(*) FILTER (WHERE status=%s) AS won "
+                "FROM leads WHERE user_id=%s GROUP BY src",
+                (ST_WON, user_id)
+            )
+        else:
+            cur.execute(
+                "SELECT COALESCE(NULLIF(source,''),'other') AS src, "
+                "COUNT(*) AS total, "
+                "COUNT(*) FILTER (WHERE status=%s) AS won "
+                "FROM leads GROUP BY src",
+                (ST_WON,)
+            )
+        return {row[0]: {"total": row[1], "won": row[2]} for row in cur.fetchall()}
+
 def db_calendar_leads(user_id: str, from_dt: str, to_dt: str) -> list:
     """Get leads with call_time in [from_dt, to_dt] for calendar view."""
     with _db() as conn:
@@ -1467,6 +1489,26 @@ async def job_stale_leads(app):
     # Web Push
     push_to_all("🔔 לידים ממתינים", f"{len(stale)} לידים ללא עדכון 3+ ימים")
 
+async def job_backup(app):
+    """Nightly off-database backup: send an Excel of ALL leads to the owner via Telegram."""
+    try:
+        leads = db_get_all()
+        if not leads:
+            return  # nothing to back up
+        buf = build_excel(None)  # all users
+        buf.seek(0)
+        now = datetime.now(TZ)
+        fname = f"backup_leads_{now.strftime('%Y-%m-%d')}.xlsx"
+        await app.bot.send_document(
+            chat_id=OWNER_CHAT_ID,
+            document=buf,
+            filename=fname,
+            caption=f"💾 גיבוי יומי — {len(leads)} לידים ({now.strftime('%d/%m/%Y')})"
+        )
+        logger.info(f"Backup sent: {len(leads)} leads")
+    except Exception as e:
+        logger.error(f"Backup job failed: {e}")
+
 def _build_bot_app() -> Application:
     """Build a configured Telegram Application with all handlers (no polling)."""
     menu_regex = (
@@ -1572,6 +1614,7 @@ async def lifespan(app: FastAPI):
         scheduler.add_job(job_weekly_report,    "cron",     day_of_week="sun", hour=10, args=[_tg_app])
         scheduler.add_job(job_monthly_report,   "cron",     day=1,   hour=10,           args=[_tg_app])
         scheduler.add_job(job_stale_leads,      "cron",     hour=10, minute=30,         args=[_tg_app])
+        scheduler.add_job(job_backup,           "cron",     hour=4,  minute=0,          args=[_tg_app])
     scheduler.start()
     logger.info("Scheduler ✓")
 
@@ -2116,6 +2159,7 @@ def get_stats(user: dict = Depends(get_current_user)):
     week_ago  = (now - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%S")
     month_ago = now.replace(day=1, hour=0, minute=0, second=0).strftime("%Y-%m-%dT%H:%M:%S")
 
+    ACTIVE_STATUSES = (ST_NEW, ST_PRE_REMINDED, ST_CALLED, ST_FOLLOW_UP)
     with _db() as conn:
         cur = conn.cursor()
         cur.execute("SELECT COUNT(*) FROM leads WHERE user_id=%s", (uid,))
@@ -2124,6 +2168,39 @@ def get_stats(user: dict = Depends(get_current_user)):
         won_total = cur.fetchone()[0]
         cur.execute("SELECT COALESCE(SUM(sale_amount),0) FROM leads WHERE user_id=%s AND status='won'", (uid,))
         rev_total = float(cur.fetchone()[0])
+        # Average sale amount (won deals with a positive amount)
+        cur.execute("SELECT COALESCE(AVG(sale_amount),0) FROM leads WHERE user_id=%s AND status='won' AND sale_amount>0", (uid,))
+        avg_sale = float(cur.fetchone()[0])
+        # Active pipeline count
+        cur.execute(
+            "SELECT COUNT(*) FROM leads WHERE user_id=%s AND status IN (%s,%s,%s,%s)",
+            (uid, *ACTIVE_STATUSES)
+        )
+        active = cur.fetchone()[0]
+        # Status breakdown
+        cur.execute("SELECT status, COUNT(*) FROM leads WHERE user_id=%s GROUP BY status", (uid,))
+        status_counts = {row[0]: row[1] for row in cur.fetchall()}
+        # Average days from creation to close (won leads)
+        cur.execute(
+            "SELECT COALESCE(AVG(EXTRACT(EPOCH FROM (updated_at::timestamp - created_at::timestamp))/86400),0) "
+            "FROM leads WHERE user_id=%s AND status='won'",
+            (uid,)
+        )
+        avg_days = float(cur.fetchone()[0] or 0)
+        # Last 7 days: leads created per day
+        cur.execute(
+            "SELECT to_char(created_at::timestamp,'YYYY-MM-DD') AS d, COUNT(*) "
+            "FROM leads WHERE user_id=%s AND created_at::timestamp >= %s GROUP BY d",
+            (uid, week_ago)
+        )
+        daily_map = {row[0]: row[1] for row in cur.fetchall()}
+
+    # Build ordered 7-day series (oldest→newest)
+    daily = []
+    for i in range(6, -1, -1):
+        d = now - timedelta(days=i)
+        key = d.strftime("%Y-%m-%d")
+        daily.append({"label": d.strftime("%d/%m"), "count": daily_map.get(key, 0)})
 
     weekly  = db_stats_since(week_ago,  uid)
     monthly = db_stats_since(month_ago, uid)
@@ -2137,12 +2214,18 @@ def get_stats(user: dict = Depends(get_current_user)):
         source_rows = [dict(r) for r in cur.fetchall()]
 
     return {
-        "total":        total,
-        "won_total":    won_total,
-        "rev_total":    rev_total,
-        "weekly":       weekly,
-        "monthly":      monthly,
-        "source_counts": {r["source"]: r["cnt"] for r in source_rows},
+        "total":              total,
+        "won_total":          won_total,
+        "rev_total":          rev_total,
+        "avg_sale":           round(avg_sale),
+        "active":             active,
+        "avg_days_to_close":  round(avg_days, 1) if avg_days else None,
+        "status_counts":      status_counts,
+        "daily":              daily,
+        "weekly":             weekly,
+        "monthly":            monthly,
+        "source_counts":      {r["source"]: r["cnt"] for r in source_rows},
+        "source_conversion":  db_source_conversion(uid),
     }
 
 @fastapi_app.get("/api/export/excel")
@@ -2154,10 +2237,6 @@ def export_excel(user: dict = Depends(get_current_user)):
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": "attachment; filename=leads.xlsx"}
     )
-
-# ── Admin Routes ──────────────────────────────────────────────────────────────
-
-@fastapi_app.get("/api/admin/users")
 
 # ── Admin Routes ──────────────────────────────────────────────────────────────
 
