@@ -1605,6 +1605,7 @@ class LeadCreate(BaseModel):
     tags:      Optional[str]  = ""
     source:    Optional[str]  = ""
     package:   Optional[str]  = ""
+    force:     Optional[bool] = False  # skip duplicate-phone check
 
     @field_validator("name", "phone", mode="before")
     @classmethod
@@ -2011,6 +2012,23 @@ def get_lead_api(lid: str, user: dict = Depends(get_current_user)):
 @fastapi_app.post("/api/leads", status_code=201)
 def create_lead(body: LeadCreate, user: dict = Depends(get_current_user)):
     created_by = user.get("display_name") or user.get("username", "")
+    # Duplicate-phone check (skipped when force=True)
+    if not body.force:
+        digits = "".join(ch for ch in body.phone if ch.isdigit())
+        if digits:
+            with _db() as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    "SELECT name FROM leads WHERE user_id=%s "
+                    "AND regexp_replace(phone, '\\D', '', 'g') = %s LIMIT 1",
+                    (user["id"], digits)
+                )
+                row = cur.fetchone()
+            if row:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"ליד עם הטלפון הזה כבר קיים: {row[0]}"
+                )
     lid = db_add_lead_full(
         body.name, body.phone, body.call_time,
         body.notes or "", body.tags or "", created_by,
