@@ -2538,6 +2538,88 @@ async def privacy_page():
 async def terms_page():
     return HTMLResponse(_TERMS_HTML)
 
+_GUIDE_HTML = """<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bar Lead Bot — מדריך מהיר</title>
+<style>
+  :root{--bg:#0f1117;--card:#1a1d27;--card2:#222634;--line:#2a2f3e;--txt:#e6e8ee;--txt2:#9aa3b5;--purple:#8b7bf0;--blue:#4facff;--green:#28c990;--red:#ff5d6c}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:system-ui,'Segoe UI',Arial,sans-serif;background:var(--bg);color:var(--txt);line-height:1.6;max-width:560px;margin:0 auto;padding:22px 16px 48px}
+  .hero{text-align:center;padding:14px 0 8px}
+  .hero .logo{font-size:44px}
+  h1{font-size:25px;margin-top:6px;background:linear-gradient(90deg,var(--purple),var(--blue));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .sub{color:var(--txt2);font-size:14px;margin-top:4px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px 16px 6px;margin:14px 0}
+  .card h2{font-size:17px;display:flex;align-items:center;gap:8px;margin-bottom:10px}
+  .badge{font-size:12px;color:var(--txt2);background:var(--card2);border-radius:20px;padding:2px 10px;margin-right:auto}
+  .step{display:flex;gap:10px;align-items:flex-start;margin-bottom:10px;font-size:15px}
+  .n{flex:0 0 24px;height:24px;border-radius:50%;background:var(--blue);color:#001;font-weight:800;font-size:13px;display:flex;align-items:center;justify-content:center;margin-top:1px}
+  .n.g{background:var(--green)} .n.p{background:var(--purple)}
+  .tip{color:var(--txt2);font-size:13px;margin:2px 0 12px;padding-right:34px}
+  .use{display:flex;gap:10px;align-items:flex-start;margin-bottom:11px;font-size:15px}
+  .use .ic{font-size:20px;flex:0 0 26px;text-align:center}
+  b{color:#fff}
+  .os{font-weight:700;color:var(--green);margin:4px 0 8px;font-size:14px}
+  .foot{text-align:center;color:var(--txt2);font-size:13px;margin-top:22px}
+  .cta{background:linear-gradient(135deg,rgba(139,123,240,.12),rgba(79,172,255,.08));border-color:rgba(139,123,240,.3)}
+  code{background:var(--card2);padding:1px 7px;border-radius:6px;color:var(--blue);font-size:14px;direction:ltr;display:inline-block}
+</style>
+</head>
+<body>
+  <div class="hero">
+    <div class="logo">🍸</div>
+    <h1>Bar Lead Bot</h1>
+    <div class="sub">מדריך מהיר · התקנה ב-2 דקות</div>
+  </div>
+  <div class="card">
+    <h2>📲 התקנה <span class="badge">2 דק׳</span></h2>
+    <div class="os">אנדרואיד</div>
+    <div class="step"><div class="n">1</div><div>פתח בכרום: <code>bar-lead-bot.onrender.com</code></div></div>
+    <div class="step"><div class="n">2</div><div>הירשם (שם, שם משתמש, סיסמה)</div></div>
+    <div class="step"><div class="n">3</div><div>תפריט ⋮ ← <b>הוספה למסך הבית</b></div></div>
+    <div class="os">אייפון — דרך Safari בלבד</div>
+    <div class="step"><div class="n">1</div><div>פתח ב-Safari: <code>bar-lead-bot.onrender.com</code></div></div>
+    <div class="step"><div class="n">2</div><div>הירשם</div></div>
+    <div class="step"><div class="n">3</div><div>כפתור שיתוף ⬆️ ← <b>הוספה למסך הבית</b></div></div>
+    <div class="tip">מעכשיו פתח תמיד מהאייקון במסך הבית.</div>
+  </div>
+  <div class="card">
+    <h2>🔔 התראות</h2>
+    <div class="step"><div class="n g">✓</div><div>תפריט ← <b>🔔 התראות לטלפון</b> ← הפעל ← אשר.</div></div>
+    <div class="tip">תקבל התראה לפני כל שיחה — גם כשהאפליקציה סגורה.</div>
+  </div>
+  <div class="card">
+    <h2>✈️ חיבור טלגרם <span class="badge">רשות</span></h2>
+    <div class="tip" style="padding:0 0 12px">רוצה לקבל תזכורות גם בטלגרם? חבר פעם אחת — עושים את זה <b>מתוך האפליקציה</b>, לא מחפשים את הבוט לבד.</div>
+    <div class="step"><div class="n p">1</div><div>באפליקציה: תפריט (למעלה) ← <b>✈️ חיבור טלגרם</b></div></div>
+    <div class="step"><div class="n p">2</div><div>לחץ על הכפתור <b>"פתח את הבוט וחבר אוטומטית"</b> — טלגרם ייפתח על הבוט <code>@BarLeadsManagerBot</code></div></div>
+    <div class="step"><div class="n p">3</div><div>בטלגרם לחץ <b>Start (התחל)</b> — ומופיעה הודעת "✅ החשבון מחובר"</div></div>
+    <div class="tip" style="padding-right:34px">לא נפתח טלגרם? באותו מסך מופיע קוד — פתח את <code>@BarLeadsManagerBot</code> ידנית ושלח לו את הקוד.</div>
+  </div>
+  <div class="card">
+    <h2>🚀 שימוש יומיומי</h2>
+    <div class="use"><div class="ic">➕</div><div><b>הוסף ליד</b> — כפתור למטה. שם + טלפון, וזהו.</div></div>
+    <div class="use"><div class="ic">📅</div><div><b>מסך "היום"</b> — כל השיחות לפי שעה. אדום = עבר הזמן.</div></div>
+    <div class="use"><div class="ic">📞</div><div><b>התקשר / וואטסאפ</b> — בלחיצה על הכרטיס.</div></div>
+    <div class="use"><div class="ic">🔄</div><div><b>עדכן סטטוס</b> — נסגר / דיבר / המשך, או דחה שיחה.</div></div>
+    <div class="use"><div class="ic">📊</div><div><b>סטטס</b> — הכנסות, המרה וגרפים.</div></div>
+  </div>
+  <div class="card cta">
+    <h2>💬 נשמח לשמוע ממך</h2>
+    <div style="font-size:15px;margin-bottom:10px">אחרי שבוע-שבועיים שימוש: מה עבד? מה בלבל? מה חסר?</div>
+    <div class="tip" style="padding:0">כל הערה עוזרת. תודה רבה! 🙏</div>
+  </div>
+  <div class="foot">שאלות? kelrom10@gmail.com</div>
+</body>
+</html>"""
+
+@fastapi_app.get("/guide", response_class=HTMLResponse)
+async def guide_page():
+    return HTMLResponse(_GUIDE_HTML)
+
 @fastapi_app.get("/{full_path:path}")
 async def serve_index(full_path: str):
     index_path = os.path.join(STATIC_DIR, "index.html")

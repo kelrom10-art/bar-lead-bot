@@ -18,6 +18,7 @@
   --text:#f0f2ff;--text2:#8892b0;--text3:#6b7591;
   --border:rgba(255,255,255,0.07);--radius:16px;--nav-h:64px;
   --safe-bottom:env(safe-area-inset-bottom,0px);
+  --safe-top:env(safe-area-inset-top,0px);
 }
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,-apple-system,sans-serif;font-size:15px}
@@ -60,7 +61,8 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
 .nav-label{font-size:10px;font-weight:600;letter-spacing:.2px}
 
 /* ── HEADERS ── */
-.screen-header{display:flex;align-items:center;justify-content:space-between;padding:16px 16px 8px;font-size:17px;font-weight:800;position:sticky;top:0;background:var(--bg);z-index:10;backdrop-filter:blur(10px)}
+.screen-header{display:flex;align-items:center;justify-content:space-between;padding:calc(var(--safe-top) + 14px) 18px 10px;font-size:17px;font-weight:800;position:sticky;top:0;background:var(--bg);z-index:10;backdrop-filter:blur(10px)}
+.user-btn{min-height:40px}
 
 /* ── CARDS ── */
 .card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;margin-bottom:10px}
@@ -248,7 +250,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
 .pipe-col-body.drag-target{border:2px dashed var(--accent);border-radius:10px;background:rgba(232,65,90,.05)}
 
 /* ── NOTIF BANNER ── */
-#notif-banner{display:none;position:sticky;top:0;left:0;right:0;z-index:200;background:linear-gradient(135deg,#1a0a2e,#2d0a20);border-bottom:1px solid rgba(232,65,90,.4);padding:10px 14px;align-items:center;gap:10px;cursor:pointer}
+#notif-banner{display:none;position:sticky;top:0;left:0;right:0;z-index:200;background:linear-gradient(135deg,#1a0a2e,#2d0a20);border-bottom:1px solid rgba(232,65,90,.4);padding:calc(var(--safe-top) + 10px) 16px 10px;align-items:center;gap:10px;cursor:pointer}
 #notif-banner.show{display:flex}
 .notif-banner-text{flex:1;font-size:13px;font-weight:600;color:#ffcce8;line-height:1.35}
 .notif-banner-btn{background:var(--accent);border:none;color:#fff;padding:7px 14px;border-radius:20px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;flex-shrink:0}
