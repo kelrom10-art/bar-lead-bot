@@ -62,7 +62,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # ── Config ────────────────────────────────────────────────────────────────────
 BOT_TOKEN         = os.getenv("BOT_TOKEN", "")
-BOT_USERNAME      = os.getenv("BOT_USERNAME", "").lstrip("@")  # for t.me deep links
+BOT_USERNAME      = os.getenv("BOT_USERNAME", "BarLeadsManagerBot").lstrip("@")  # for t.me deep links
 OWNER_CHAT_ID     = int(os.getenv("OWNER_CHAT_ID", "0"))
 DATABASE_URL      = os.getenv("DATABASE_URL", "")
 PORT              = int(os.getenv("PORT", "8080"))
