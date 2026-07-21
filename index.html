@@ -365,6 +365,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
     <span style="font-size:22px">🔔</span>
     <div class="notif-banner-text">הפעל התראות<br><span style="font-size:11px;font-weight:400;color:rgba(255,204,232,.7)">קבל התראה כשיש שיחה — כמו ווצאפ</span></div>
     <button class="notif-banner-btn" onclick="event.stopPropagation();doEnableNotifQuick()">הפעל עכשיו</button>
+    <button aria-label="סגור" onclick="event.stopPropagation();dismissNotifBanner()" style="background:transparent;border:none;color:rgba(255,255,255,.6);font-size:20px;line-height:1;cursor:pointer;padding:4px 6px;flex-shrink:0">✕</button>
   </div>
 
   <!-- TODAY -->
@@ -1054,12 +1055,18 @@ function launchApp(user) {
 }
 
 function showPushBanner() {
+  try { if (sessionStorage.getItem('notifBannerDismissed')==='1') return; } catch(e){}
   const b = document.getElementById('notif-banner');
   if (b) b.classList.add('show');
 }
 function hidePushBanner() {
   const b = document.getElementById('notif-banner');
   if (b) b.classList.remove('show');
+}
+// User dismissed the banner manually — hide for this session so the menu is reachable
+function dismissNotifBanner() {
+  hidePushBanner();
+  try { sessionStorage.setItem('notifBannerDismissed','1'); } catch(e){}
 }
 
 // Quick-enable from banner (no modal)
