@@ -1810,11 +1810,12 @@ def forgot_password(body: ForgotPasswordRequest):
             f"<p>הקוד תקף לשעה אחת.</p>"
         )
     if not sent:
-        # No SMTP configured — return code for dev/admin use only (log it server-side)
+        # No SMTP configured: log server-side ONLY. Never return the code in the
+        # response — doing so lets anyone who knows a username reset the password.
         logger.info(f"Password reset code for {body.username}: {code}")
-        # Still return it so the user can reset (single-user / no email setup)
-        return {"message": "קוד איפוס נוצר — בדוק את הלוגים של המנהל", "code": code}
-    return {"message": "קוד איפוס נשלח לאימייל"}
+        # Same generic message regardless, to avoid leaking whether email was sent.
+        return {"message": "אם המשתמש קיים, קוד איפוס נשלח"}
+    return {"message": "אם המשתמש קיים, קוד איפוס נשלח"}
 
 @fastapi_app.post("/api/auth/reset-password")
 def reset_password(body: ResetPasswordRequest):
@@ -2045,11 +2046,19 @@ def get_leads(
             rows = [dict(r) for r in cur.fetchall()]
     return [enrich(r) for r in rows]
 
-@fastapi_app.get("/api/leads/{lid}")
-def get_lead_api(lid: str, user: dict = Depends(get_current_user)):
+def _get_owned_lead(lid: str, user: dict) -> dict:
+    """Fetch a lead and enforce ownership. Returns the lead or raises 404.
+    Uses 404 (not 403) so callers can't probe which IDs exist for other users."""
     row = db_get_lead(lid)
     if not row:
         raise HTTPException(404, "Lead not found")
+    if not user.get("is_admin") and row.get("user_id") != user["id"]:
+        raise HTTPException(404, "Lead not found")
+    return row
+
+@fastapi_app.get("/api/leads/{lid}")
+def get_lead_api(lid: str, user: dict = Depends(get_current_user)):
+    row = _get_owned_lead(lid, user)
     return enrich(row)
 
 @fastapi_app.post("/api/leads", status_code=201)
@@ -2128,9 +2137,7 @@ async def import_leads_csv(
 
 @fastapi_app.put("/api/leads/{lid}")
 def update_lead_api(lid: str, body: LeadUpdate, user: dict = Depends(get_current_user)):
-    existing = db_get_lead(lid)
-    if not existing:
-        raise HTTPException(404, "Lead not found")
+    existing = _get_owned_lead(lid, user)
     raw     = body.model_dump(exclude_unset=True)
     updates = {k: v for k, v in raw.items() if not (k in ("name", "phone") and not v)}
     if not updates:
@@ -2147,6 +2154,7 @@ def update_lead_api(lid: str, body: LeadUpdate, user: dict = Depends(get_current
 
 @fastapi_app.delete("/api/leads/{lid}")
 def delete_lead_api(lid: str, user: dict = Depends(get_current_user)):
+    _get_owned_lead(lid, user)  # enforce ownership before deleting
     db_delete_lead(lid)
     return {"message": "Deleted"}
 
@@ -2273,6 +2281,68 @@ def admin_delete_user(uid: str, admin: dict = Depends(require_admin)):
         cur.execute("DELETE FROM leads WHERE user_id=%s", (uid,))
         cur.execute("DELETE FROM users WHERE id=%s", (uid,))
     return {"message": "User deleted"}
+
+def _legal_page(title_txt: str, body_html: str) -> str:
+    return (
+        "<!doctype html><html lang='he' dir='rtl'><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        f"<title>{title_txt} — Bar Lead Manager</title>"
+        "<style>body{font-family:system-ui,'Segoe UI',Arial,sans-serif;background:#0f1117;"
+        "color:#e6e8ee;line-height:1.7;max-width:760px;margin:0 auto;padding:28px 20px 60px}"
+        "h1{color:#4facff;font-size:26px}h2{color:#b49aff;font-size:19px;margin-top:26px}"
+        "a{color:#4facff}.muted{color:#8b94a7;font-size:13px}"
+        ".back{display:inline-block;margin-bottom:18px;color:#8b94a7;text-decoration:none}"
+        "ul{padding-in-line-start:20px}li{margin:6px 0}</style></head><body>"
+        "<a class='back' href='/'>← חזרה לאפליקציה</a>"
+        f"<h1>{title_txt}</h1>{body_html}"
+        "<p class='muted'>עודכן לאחרונה: יולי 2026. מסמך זה הוא תבנית כללית ואינו מהווה ייעוץ משפטי; "
+        "מומלץ שעורך/ת דין יעבור/תעבור עליו לפני שימוש מסחרי.</p></body></html>"
+    )
+
+_PRIVACY_HTML = _legal_page("מדיניות פרטיות", (
+    "<p>מדיניות זו מסבירה כיצד Bar Lead Manager (\"השירות\") אוסף, משתמש ושומר מידע אישי, "
+    "בהתאם לחוק הגנת הפרטיות, התשמ\"א-1981 ותיקוניו (לרבות תיקון 13).</p>"
+    "<h2>איזה מידע נאסף</h2><ul>"
+    "<li>פרטי חשבון: שם משתמש, כתובת אימייל וסיסמה מוצפנת.</li>"
+    "<li>נתוני לידים שאתה מזין: שמות, מספרי טלפון, מקור הפנייה, הערות ותגיות.</li>"
+    "<li>נתוני שימוש טכניים בסיסיים הדרושים לתפעול השירות.</li></ul>"
+    "<h2>למה המידע משמש</h2><ul>"
+    "<li>לספק את השירות: ניהול לידים, תזכורות, סטטיסטיקות והתראות.</li>"
+    "<li>לאבטחת החשבון ולמניעת שימוש לרעה.</li></ul>"
+    "<h2>שמירה ואבטחה</h2>"
+    "<p>סיסמאות נשמרות מוצפנות (PBKDF2). הגישה לנתונים מוגבלת לחשבון שלך בלבד. "
+    "המידע נשמר כל עוד החשבון פעיל, ונמחק לפי בקשה.</p>"
+    "<h2>הזכויות שלך</h2>"
+    "<p>יש לך זכות לעיין במידע שלך, לתקן אותו, ולבקש את מחיקתו. לפניות: kelrom10@gmail.com.</p>"
+    "<h2>צד שלישי</h2>"
+    "<p>המידע מאוחסן אצל ספקי תשתית (Supabase, Render). התראות עשויות להישלח דרך "
+    "שירותי Web Push וטלגרם לפי בחירתך.</p>"
+))
+
+_TERMS_HTML = _legal_page("תנאי שימוש", (
+    "<p>השימוש ב-Bar Lead Manager (\"השירות\") כפוף לתנאים הבאים. שימוש בשירות מהווה הסכמה להם.</p>"
+    "<h2>השירות</h2>"
+    "<p>השירות מספק כלי לניהול לידים ומעקב אחר פניות. אנו שואפים לזמינות גבוהה אך איננו "
+    "מתחייבים לפעילות רציפה וללא תקלות.</p>"
+    "<h2>אחריות המשתמש</h2><ul>"
+    "<li>אתה אחראי לשמירת סודיות פרטי הכניסה שלך.</li>"
+    "<li>אתה אחראי לחוקיות המידע שאתה מזין, ולכך שיש לך בסיס חוקי להחזיק בפרטי הלידים.</li>"
+    "<li>אין להשתמש בשירות למטרות בלתי חוקיות או לשליחת דיוור לא מורשה.</li></ul>"
+    "<h2>הגבלת אחריות</h2>"
+    "<p>השירות ניתן \"כפי שהוא\" (AS-IS). איננו אחראים לנזק עקיף או לאובדן מידע; "
+    "מומלץ לשמור גיבוי עצמאי של נתונים חשובים.</p>"
+    "<h2>שינויים</h2>"
+    "<p>אנו רשאים לעדכן תנאים אלה מעת לעת. המשך שימוש לאחר עדכון מהווה הסכמה לתנאים המעודכנים.</p>"
+    "<h2>יצירת קשר</h2><p>לשאלות: kelrom10@gmail.com.</p>"
+))
+
+@fastapi_app.get("/privacy", response_class=HTMLResponse)
+async def privacy_page():
+    return HTMLResponse(_PRIVACY_HTML)
+
+@fastapi_app.get("/terms", response_class=HTMLResponse)
+async def terms_page():
+    return HTMLResponse(_TERMS_HTML)
 
 @fastapi_app.get("/{full_path:path}")
 async def serve_index(full_path: str):

@@ -316,6 +316,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
         <button type="submit" class="login-btn" id="reg-btn">הירשם 🎉</button>
       </form>
       <div id="reg-error" class="login-error"></div>
+      <div class="login-footer" style="font-size:11px;color:var(--text2)">בהרשמה אתה מאשר את <a href="/terms" target="_blank" class="login-link">תנאי השימוש</a> ו<a href="/privacy" target="_blank" class="login-link">מדיניות הפרטיות</a></div>
       <div class="login-footer">כבר יש לך חשבון? <a onclick="showAuthScreen('login')" class="login-link">התחבר</a></div>
     </div>
   </div>
@@ -977,12 +978,7 @@ async function requestReset() {
     const data = await res.json();
     if (!res.ok) { document.getElementById('forgot-error').textContent=data.detail||'שגיאה'; return; }
     document.getElementById('forgot-step2').style.display='block';
-    if (data.code) {
-      document.getElementById('reset-code').value = data.code;
-      toast(`🔢 קוד האיפוס: ${data.code}`, 10000);
-    } else {
-      toast('📧 קוד נשלח!');
-    }
+    toast('📧 אם המשתמש קיים, נשלח קוד איפוס לאימייל');
   } catch(err) {
     document.getElementById('forgot-error').textContent='שגיאת חיבור';
   }
