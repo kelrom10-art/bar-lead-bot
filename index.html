@@ -379,6 +379,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
             <div class="user-handle" id="dd-username">—</div>
           </div>
           <div class="user-dropdown-item" onclick="openNotifModal()">🔔 התראות לטלפון</div>
+          <div class="user-dropdown-item" onclick="openTelegramModal()">✈️ חיבור טלגרם</div>
           <div class="user-dropdown-item" onclick="goToAdmin()">⚙️ ניהול מערכת</div>
           <div class="user-dropdown-item" style="color:var(--red)" onclick="doLogout()">🚪 התנתקות</div>
         </div>
@@ -717,6 +718,16 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
   </div>
 </div>
 
+<!-- TELEGRAM LINK MODAL -->
+<div id="tg-modal" onclick="if(event.target===this)closeTelegramModal()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:500;align-items:center;justify-content:center;padding:20px">
+  <div style="background:var(--card);border:1px solid var(--border);border-radius:20px;padding:24px 20px;width:100%;max-width:360px;position:relative">
+    <div style="font-size:19px;font-weight:800;margin-bottom:4px;text-align:center">✈️ חיבור טלגרם</div>
+    <div style="font-size:12px;color:var(--text3);text-align:center;margin-bottom:16px">קבל תזכורות שיחה ישירות לטלגרם שלך</div>
+    <div id="tg-body" style="text-align:center;font-size:14px;color:var(--text2);padding:12px 0">⏳ טוען...</div>
+    <button class="btn btn-gray" style="width:100%;color:var(--text2);margin-top:8px" onclick="closeTelegramModal()">סגור</button>
+  </div>
+</div>
+
 <!-- TOAST -->
 <div class="toast" id="toast"></div>
 <div id="offline-banner" style="display:none;position:fixed;top:0;left:0;right:0;z-index:900;background:var(--red,#e5484d);color:#fff;text-align:center;padding:8px 12px;font-size:13px;font-weight:700">📡 אין חיבור לאינטרנט — השינויים לא יישמרו</div>
@@ -896,6 +907,8 @@ document.addEventListener('keydown', e => {
     if (leadM?.classList.contains('open')) { leadM.classList.remove('open'); return; }
     const notifM = document.getElementById('notif-modal');
     if (notifM && notifM.style.display !== 'none' && notifM.style.display !== '') { closeNotifModal(); return; }
+    const tgM = document.getElementById('tg-modal');
+    if (tgM && tgM.style.display !== 'none' && tgM.style.display !== '') { closeTelegramModal(); return; }
     return;
   }
   // + opens Quick Add (when no modal open, no input focused, on today/leads)
@@ -1154,6 +1167,55 @@ async function openNotifModal() {
 
 function closeNotifModal() {
   document.getElementById('notif-modal').style.display = 'none';
+}
+
+// ── Telegram linking ────────────────────────────────────────────────────────
+async function openTelegramModal() {
+  document.getElementById('user-dropdown')?.classList.remove('open');
+  const modal = document.getElementById('tg-modal');
+  const body  = document.getElementById('tg-body');
+  modal.style.display = 'flex';
+  body.innerHTML = '⏳ טוען...';
+  try {
+    const info = await apiFetch('/api/telegram/link').then(r=>r.json());
+    if (!info.enabled) {
+      body.innerHTML = '<div style="color:var(--text3)">חיבור טלגרם אינו זמין כרגע.</div>';
+      return;
+    }
+    if (info.connected) {
+      body.innerHTML = `
+        <div style="font-size:40px;margin-bottom:6px">✅</div>
+        <div style="font-weight:700;color:var(--green);margin-bottom:4px">הטלגרם מחובר!</div>
+        <div style="font-size:12px;color:var(--text3);margin-bottom:16px">אתה מקבל תזכורות שיחה ישירות לטלגרם.</div>
+        <button class="btn btn-gray btn-sm" onclick="unlinkTelegram()" style="color:var(--red)">נתק טלגרם</button>`;
+      return;
+    }
+    const btn = info.deep_link
+      ? `<a href="${info.deep_link}" target="_blank" class="btn btn-blue" style="width:100%;text-decoration:none;display:block;margin-bottom:14px">✈️ פתח את הבוט וחבר אוטומטית</a>`
+      : '';
+    body.innerHTML = `
+      <div style="text-align:right;line-height:1.9;font-size:13px;margin-bottom:14px">
+        <div><b>1.</b> לחץ על הכפתור למטה (או חפש את הבוט בטלגרם)</div>
+        <div><b>2.</b> לחץ <b>Start</b> — והחשבון יתחבר אוטומטית</div>
+        <div style="color:var(--text3);margin-top:6px">או שלח לבוט ידנית את הקוד:</div>
+      </div>
+      ${btn}
+      <div style="background:rgba(255,255,255,.05);border:1px dashed var(--border);border-radius:10px;padding:12px;font-size:22px;font-weight:800;letter-spacing:3px;color:var(--accent);margin-bottom:6px">${info.code}</div>
+      <div style="font-size:11px;color:var(--text3)">הקוד אישי ומקשר את הטלגרם שלך לחשבון זה בלבד</div>`;
+  } catch(e) {
+    body.innerHTML = '<div style="color:var(--red)">שגיאה בטעינה</div>';
+  }
+}
+function closeTelegramModal() {
+  document.getElementById('tg-modal').style.display = 'none';
+}
+async function unlinkTelegram() {
+  if (!confirm('לנתק את הטלגרם מהחשבון?')) return;
+  try {
+    await apiFetch('/api/telegram/unlink', {method:'POST'});
+    toast('הטלגרם נותק');
+    openTelegramModal();
+  } catch(e) { toast('❌ שגיאה'); }
 }
 
 async function refreshNotifStatus() {

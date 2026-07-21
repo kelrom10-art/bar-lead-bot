@@ -62,6 +62,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # ── Config ────────────────────────────────────────────────────────────────────
 BOT_TOKEN         = os.getenv("BOT_TOKEN", "")
+BOT_USERNAME      = os.getenv("BOT_USERNAME", "").lstrip("@")  # for t.me deep links
 OWNER_CHAT_ID     = int(os.getenv("OWNER_CHAT_ID", "0"))
 DATABASE_URL      = os.getenv("DATABASE_URL", "")
 PORT              = int(os.getenv("PORT", "8080"))
@@ -194,6 +195,8 @@ def ensure_db():
             )
         """)
         cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN DEFAULT FALSE")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_chat_id TEXT DEFAULT ''")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_link_code TEXT DEFAULT ''")
         # Sessions table
         cur.execute("""
             CREATE TABLE IF NOT EXISTS sessions (
@@ -289,11 +292,60 @@ def db_get_user_by_token(token: str) -> Optional[dict]:
     with _db() as conn:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute("""
-            SELECT u.id, u.username, u.display_name, u.created_at, u.is_admin
+            SELECT u.id, u.username, u.display_name, u.created_at, u.is_admin,
+                   u.telegram_chat_id
             FROM users u
             JOIN sessions s ON s.user_id = u.id
             WHERE s.token = %s AND s.expires_at > %s
         """, (token, now))
+        row = cur.fetchone()
+    return dict(row) if row else None
+
+# ── Telegram personal linking ─────────────────────────────────────────────────
+def db_get_or_create_link_code(user_id: str) -> str:
+    """Return a stable per-user code that links a Telegram chat to this account."""
+    with _db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT telegram_link_code FROM users WHERE id=%s", (user_id,))
+        row = cur.fetchone()
+        code = row[0] if row and row[0] else ""
+        if not code:
+            code = secrets.token_hex(4).upper()  # 8 hex chars, e.g. 'A1B2C3D4'
+            cur.execute("UPDATE users SET telegram_link_code=%s WHERE id=%s", (code, user_id))
+    return code
+
+def db_link_telegram(code: str, chat_id: str) -> Optional[dict]:
+    """Bind a Telegram chat_id to the user that owns `code`. Returns the user or None."""
+    code = (code or "").strip().upper()
+    if not code:
+        return None
+    with _db() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT * FROM users WHERE telegram_link_code=%s", (code,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        cur.execute("UPDATE users SET telegram_chat_id=%s WHERE id=%s", (str(chat_id), row["id"]))
+    return dict(row)
+
+def db_get_user_chat_id(user_id: str) -> str:
+    with _db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT telegram_chat_id FROM users WHERE id=%s", (user_id,))
+        row = cur.fetchone()
+    return (row[0] if row and row[0] else "")
+
+def db_users_with_telegram() -> list:
+    with _db() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT id, display_name, username, telegram_chat_id FROM users "
+                    "WHERE telegram_chat_id IS NOT NULL AND telegram_chat_id != ''")
+        return [dict(r) for r in cur.fetchall()]
+
+def db_get_user_by_chat_id(chat_id: str) -> Optional[dict]:
+    with _db() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT * FROM users WHERE telegram_chat_id=%s", (str(chat_id),))
         row = cur.fetchone()
     return dict(row) if row else None
 
@@ -524,13 +576,15 @@ def push_to_all(title: str, body: str, url: str = "/", phone: str = ""):
     for sub in subs:
         _send_push_one(sub, title, body, url, phone)
 
-def _send_tg(html_msg: str) -> None:
-    """Synchronous fire-and-forget Telegram notification (never raises)."""
-    if not BOT_TOKEN or not OWNER_CHAT_ID:
+def _send_tg(html_msg: str, chat_id=None) -> None:
+    """Synchronous fire-and-forget Telegram notification (never raises).
+    Sends to `chat_id` if given, else to the owner. If neither exists, no-op."""
+    target = chat_id or OWNER_CHAT_ID
+    if not BOT_TOKEN or not target:
         return
     try:
         payload = json.dumps({
-            "chat_id": OWNER_CHAT_ID,
+            "chat_id": target,
             "text":    html_msg,
             "parse_mode": "HTML",
         }).encode()
@@ -749,14 +803,20 @@ def db_get_leads_followup_due() -> list:
         )
         return [dict(r) for r in cur.fetchall()]
 
-def db_get_stale_leads() -> list:
+def db_get_stale_leads(user_id: Optional[str] = None) -> list:
     threshold = (datetime.now(TZ) - timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%S")
     with _db() as conn:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute(
-            "SELECT * FROM leads WHERE status=%s AND updated_at <= %s",
-            (ST_CALLED, threshold)
-        )
+        if user_id:
+            cur.execute(
+                "SELECT * FROM leads WHERE status=%s AND updated_at <= %s AND user_id=%s",
+                (ST_CALLED, threshold, user_id)
+            )
+        else:
+            cur.execute(
+                "SELECT * FROM leads WHERE status=%s AND updated_at <= %s",
+                (ST_CALLED, threshold)
+            )
         return [dict(r) for r in cur.fetchall()]
 
 def db_stats_since(since: str, user_id: Optional[str] = None) -> dict:
@@ -978,6 +1038,9 @@ def build_excel(user_id: Optional[str] = None) -> io.BytesIO:
     return buf
 
 async def add_start(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not _tg_uid(u):
+        await u.message.reply_text(_LINK_PROMPT, parse_mode="Markdown")
+        return ConversationHandler.END
     ctx.user_data.clear()
     await u.message.reply_text(
         "👤 *מה שם הלקוח?*\n\n_שלח /cancel לביטול_", parse_mode="Markdown")
@@ -1026,7 +1089,7 @@ async def got_time(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return ASK_TIME
     name  = ctx.user_data["name"]
     phone = ctx.user_data["phone"]
-    lid   = db_add_lead(name, phone, call_dt)
+    lid   = db_add_lead(name, phone, call_dt, user_id=_tg_uid(u) or "")
     ctx.user_data.clear()
     await u.message.reply_text(
         f"🎯 *ליד נוסף בהצלחה!*\n\n"
@@ -1043,13 +1106,54 @@ async def cancel_add(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await u.message.reply_text("❌ הוספת ליד בוטלה.", reply_markup=MAIN_MENU)
     return ConversationHandler.END
 
+_LINK_PROMPT = (
+    "🔗 *חשבון לא מקושר*\n\n"
+    "כדי לקבל תזכורות ולנהל את הלידים שלך דרך הבוט, צריך לקשר אותו לחשבון שלך:\n"
+    "1. היכנס לאפליקציה\n"
+    "2. פתח את התפריט ← *חיבור טלגרם*\n"
+    "3. שלח כאן את הקוד שמופיע שם"
+)
+
+def _tg_uid(u: Update) -> Optional[str]:
+    """Resolve the Telegram sender's chat to a linked user_id, or None if unlinked."""
+    chat = u.effective_chat
+    if not chat:
+        return None
+    usr = db_get_user_by_chat_id(str(chat.id))
+    return usr["id"] if usr else None
+
+def _tg_owns(uid: Optional[str], lid: str) -> bool:
+    """True if the linked user owns this lead."""
+    if not uid:
+        return False
+    ld = db_get_lead(lid)
+    return bool(ld and ld.get("user_id") == uid)
+
 async def cmd_start(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    # Deep-link linking: /start <CODE>
+    args = ctx.args if hasattr(ctx, "args") else []
+    if args:
+        linked = db_link_telegram(args[0], u.effective_chat.id)
+        if linked:
+            await u.message.reply_text(
+                f"✅ *הצלחה!* החשבון של *{linked.get('display_name') or linked.get('username')}* מקושר.\n"
+                "מעכשיו תקבל כאן את התזכורות שלך. 🍸",
+                parse_mode="Markdown", reply_markup=MAIN_MENU)
+            return
+        await u.message.reply_text("❌ קוד קישור לא תקין או שפג. קבל קוד חדש מהאפליקציה.", reply_markup=MAIN_MENU)
+        return
+    if not _tg_uid(u):
+        await u.message.reply_text(_LINK_PROMPT, parse_mode="Markdown")
+        return
     await u.message.reply_text(
         "👋 *שלום! בוט ניהול הלידים שלך* 🍸\n\nבחר פעולה:",
         parse_mode="Markdown", reply_markup=MAIN_MENU)
 
 async def show_today(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    leads  = db_get_today()
+    uid = _tg_uid(u)
+    if not uid:
+        await u.message.reply_text(_LINK_PROMPT, parse_mode="Markdown"); return
+    leads  = db_get_today(uid)
     active = [l for l in leads if l.get("status") in (ST_NEW, ST_PRE_REMINDED, ST_CALLED, ST_FOLLOW_UP)]
     if not active:
         await u.message.reply_text("📅 אין שיחות מתוכננות להיום! 🎉", reply_markup=MAIN_MENU)
@@ -1065,7 +1169,10 @@ async def show_today(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await u.message.reply_text("\n".join(lines), parse_mode="Markdown", reply_markup=MAIN_MENU)
 
 async def show_old_leads(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    old = db_get_old()
+    uid = _tg_uid(u)
+    if not uid:
+        await u.message.reply_text(_LINK_PROMPT, parse_mode="Markdown"); return
+    old = db_get_old(uid)
     if not old:
         await u.message.reply_text("📁 אין לידים ישנים.", reply_markup=MAIN_MENU)
         return
@@ -1083,7 +1190,10 @@ async def show_old_leads(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
             reply_markup=kb, parse_mode="Markdown")
 
 async def show_reminders(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    active = db_get_active()
+    uid = _tg_uid(u)
+    if not uid:
+        await u.message.reply_text(_LINK_PROMPT, parse_mode="Markdown"); return
+    active = db_get_active(uid)
     if not active:
         await u.message.reply_text("✅ אין תזכורות פעילות!", reply_markup=MAIN_MENU)
         return
@@ -1102,9 +1212,12 @@ async def show_reminders(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await u.message.reply_text("\n".join(lines), parse_mode="Markdown", reply_markup=MAIN_MENU)
 
 async def show_summary(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = _tg_uid(u)
+    if not uid:
+        await u.message.reply_text(_LINK_PROMPT, parse_mode="Markdown"); return
     now     = datetime.now(TZ)
-    weekly  = db_stats_since((now - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%S"))
-    monthly = db_stats_since(now.replace(day=1, hour=0, minute=0, second=0).strftime("%Y-%m-%dT%H:%M:%S"))
+    weekly  = db_stats_since((now - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%S"), uid)
+    monthly = db_stats_since(now.replace(day=1, hour=0, minute=0, second=0).strftime("%Y-%m-%dT%H:%M:%S"), uid)
     rate    = lambda s: f"{s['won_count']/s['total']*100:.0f}%" if s["total"] else "—"
     await u.message.reply_text(
         "📊 *סיכום ביצועים*\n\n"
@@ -1114,7 +1227,7 @@ async def show_summary(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"📆 *החודש הנוכחי:*\n"
         f"  לידים: {monthly['total']} | ✅ נסגרו: {monthly['won_count']} | ❌ אבדו: {monthly['lost']}\n"
         f"  💰 הכנסות: ₪{monthly['won_amount']:,.0f} | המרה: {rate(monthly)}\n\n"
-        f"🟢 פעילים: {len(db_get_active())} | 📁 ישנים: {len(db_get_old())}",
+        f"🟢 פעילים: {len(db_get_active(uid))} | 📁 ישנים: {len(db_get_old(uid))}",
         parse_mode="Markdown", reply_markup=MAIN_MENU)
 
 async def start_search(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1122,9 +1235,12 @@ async def start_search(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await u.message.reply_text("🔍 *חיפוש ליד*\n\nהכנס שם או מספר טלפון:", parse_mode="Markdown")
 
 async def export_excel_bot(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = _tg_uid(u)
+    if not uid:
+        await u.message.reply_text(_LINK_PROMPT, parse_mode="Markdown"); return
     await u.message.reply_text("⏳ מכין קובץ Excel...", reply_markup=MAIN_MENU)
     try:
-        buf   = build_excel()
+        buf   = build_excel(uid)
         fname = f"leads_{datetime.now(TZ).strftime('%d%m%Y_%H%M')}.xlsx"
         await u.message.reply_document(
             document=buf, filename=fname,
@@ -1134,7 +1250,10 @@ async def export_excel_bot(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await u.message.reply_text(f"❌ שגיאה ביצירת קובץ: {e}")
 
 async def start_edit(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    active = db_get_active()
+    uid = _tg_uid(u)
+    if not uid:
+        await u.message.reply_text(_LINK_PROMPT, parse_mode="Markdown"); return
+    active = db_get_active(uid)
     if not active:
         await u.message.reply_text("❌ אין לידים פעילים לעריכה.", reply_markup=MAIN_MENU)
         return
@@ -1190,7 +1309,7 @@ async def handle_text(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     if state == "searching":
-        results = db_search(text)
+        results = db_search(text, _tg_uid(u))
         ctx.user_data.clear()
         if not results:
             await u.message.reply_text(
@@ -1264,6 +1383,19 @@ async def callback_handler(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = u.callback_query
     await q.answer()
     data = q.data
+
+    # Multi-tenant guard: resolve the sender and verify they own the referenced lead.
+    uid = _tg_uid(u)
+    if not uid:
+        await q.edit_message_text("🔗 קשר קודם את החשבון דרך האפליקציה."); return
+    _lid = None
+    if data.startswith(("edit_", "recall_")):
+        _lid = data.split("_", 1)[1]
+    elif data.startswith(("edf_", "out_", "snz_")):
+        parts = data.split("_")
+        _lid = parts[1] if len(parts) > 1 else None
+    if _lid and not _tg_owns(uid, _lid):
+        await q.edit_message_text("❌ אין לך גישה לליד הזה."); return
 
     if data.startswith("edit_"):
         lid = data.replace("edit_", "")
@@ -1381,14 +1513,13 @@ async def job_check_reminders(app):
                     for sub in push_subs:
                         push_sent = _send_push_one(sub, push_title, push_body, "/", ld.get("phone","")) or push_sent
 
-            # Telegram — always send (as backup)
-            try:
-                await app.bot.send_message(
-                    chat_id=OWNER_CHAT_ID,
-                    text=tg_text,
-                    parse_mode="Markdown")
-            except Exception as tg_err:
-                logger.warning(f"Telegram send failed: {tg_err}")
+            # Telegram — send to the LEAD OWNER's linked chat (per-user)
+            chat = db_get_user_chat_id(uid) if uid else ""
+            if chat:
+                try:
+                    await app.bot.send_message(chat_id=chat, text=tg_text, parse_mode="Markdown")
+                except Exception as tg_err:
+                    logger.warning(f"Telegram send failed: {tg_err}")
 
             logger.info(f"Reminder sent: lead={ld.get('id')} push={push_sent}")
             db_update_lead(ld["id"], status=ST_PRE_REMINDED)
@@ -1396,19 +1527,23 @@ async def job_check_reminders(app):
             logger.error(f"pre_reminder [{ld.get('id')}]: {e}")
     for ld in db_get_leads_post_call():
         try:
-            await app.bot.send_message(
-                chat_id=OWNER_CHAT_ID,
-                text=f"📞 *מה קרה עם {ld['name']}?*\n📱 {ld.get('phone', '—')}",
-                reply_markup=outcome_kb(ld["id"]), parse_mode="Markdown")
+            chat = db_get_user_chat_id(ld.get("user_id") or "")
+            if chat:
+                await app.bot.send_message(
+                    chat_id=chat,
+                    text=f"📞 *מה קרה עם {ld['name']}?*\n📱 {ld.get('phone', '—')}",
+                    reply_markup=outcome_kb(ld["id"]), parse_mode="Markdown")
             db_update_lead(ld["id"], status=ST_CALLED)
         except Exception as e:
             logger.error(f"post_call [{ld.get('id')}]: {e}")
     for ld in db_get_leads_followup_due():
         try:
-            await app.bot.send_message(
-                chat_id=OWNER_CHAT_ID,
-                text=f"🔄 *זמן לחזור אל {ld['name']}!*\n📱 {ld.get('phone', '—')}",
-                reply_markup=outcome_kb(ld["id"]), parse_mode="Markdown")
+            chat = db_get_user_chat_id(ld.get("user_id") or "")
+            if chat:
+                await app.bot.send_message(
+                    chat_id=chat,
+                    text=f"🔄 *זמן לחזור אל {ld['name']}!*\n📱 {ld.get('phone', '—')}",
+                    reply_markup=outcome_kb(ld["id"]), parse_mode="Markdown")
             db_update_lead(ld["id"], status=ST_CALLED)
         except Exception as e:
             logger.error(f"followup_due [{ld.get('id')}]: {e}")
@@ -1427,71 +1562,104 @@ def job_self_ping():
         logger.warning(f"Self-ping failed (non-critical): {e}")
 
 async def job_morning_briefing(app):
-    active = db_get_active()
-    old    = db_get_old()
-    if not active and not old:
-        return
-    now   = datetime.now(TZ)
-    lines = [f"☀️ *בוקר טוב! {now.strftime('%d/%m/%Y')}*\n"]
-    if active:
-        lines.append(f"📋 *שיחות ותזכורות ({len(active)}):*")
-        for ld in active[:10]:
-            ct = str(ld.get("call_time") or ld.get("follow_up_time") or "")
-            dt = _parse_dt(ct) if ct else None
-            t  = f" ⏰{dt.strftime('%H:%M')}" if dt else ""
-            lines.append(f"{STATUS_EMOJI.get(ld.get('status'), '❓')} *{ld['name']}*{t}")
-    if old:
-        lines.append(f"\n📁 *{len(old)} לידים ישנים*")
-    await app.bot.send_message(chat_id=OWNER_CHAT_ID, text="\n".join(lines), parse_mode="Markdown")
-    # Web Push briefing
-    push_body = f"{len(active)} שיחות היום" if active else "אין שיחות היום"
-    if old:
-        push_body += f" · {len(old)} ישנים"
-    push_to_all("☀️ בוקר טוב!", push_body)
+    now = datetime.now(TZ)
+    # Per-user briefing: each linked user gets their own summary + push.
+    for usr in db_list_users():
+        uid = usr["id"]
+        active = db_get_active(uid)
+        old    = db_get_old(uid)
+        if not active and not old:
+            continue
+        lines = [f"☀️ *בוקר טוב! {now.strftime('%d/%m/%Y')}*\n"]
+        if active:
+            lines.append(f"📋 *שיחות ותזכורות ({len(active)}):*")
+            for ld in active[:10]:
+                ct = str(ld.get("call_time") or ld.get("follow_up_time") or "")
+                dt = _parse_dt(ct) if ct else None
+                t  = f" ⏰{dt.strftime('%H:%M')}" if dt else ""
+                lines.append(f"{STATUS_EMOJI.get(ld.get('status'), '❓')} *{ld['name']}*{t}")
+        if old:
+            lines.append(f"\n📁 *{len(old)} לידים ישנים*")
+        chat = db_get_user_chat_id(uid)
+        if chat:
+            try:
+                await app.bot.send_message(chat_id=chat, text="\n".join(lines), parse_mode="Markdown")
+            except Exception as e:
+                logger.warning(f"briefing tg [{uid}]: {e}")
+        # Web Push per-user
+        push_body = f"{len(active)} שיחות היום" if active else "אין שיחות היום"
+        if old:
+            push_body += f" · {len(old)} ישנים"
+        for sub in db_get_push_subscriptions_for_user(uid):
+            _send_push_one(sub, "☀️ בוקר טוב!", push_body, "/", "")
 
 async def job_weekly_report(app):
-    s    = db_stats_since((datetime.now(TZ) - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%S"))
-    rate = f"{s['won_count']/s['total']*100:.0f}%" if s["total"] else "—"
-    await app.bot.send_message(
-        chat_id=OWNER_CHAT_ID,
-        text=f"📊 *דוח שבועי*\n\n"
-             f"לידים: {s['total']} | ✅ נסגרו: {s['won_count']} | ❌ אבדו: {s['lost']}\n"
-             f"💰 הכנסות: ₪{s['won_amount']:,.0f} | המרה: {rate}\n\nשבוע מוצלח! 🍸",
-        parse_mode="Markdown")
+    since = (datetime.now(TZ) - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%S")
+    for usr in db_users_with_telegram():
+        s = db_stats_since(since, usr["id"])
+        if not s["total"]:
+            continue
+        rate = f"{s['won_count']/s['total']*100:.0f}%" if s["total"] else "—"
+        try:
+            await app.bot.send_message(
+                chat_id=usr["telegram_chat_id"],
+                text=f"📊 *דוח שבועי*\n\n"
+                     f"לידים: {s['total']} | ✅ נסגרו: {s['won_count']} | ❌ אבדו: {s['lost']}\n"
+                     f"💰 הכנסות: ₪{s['won_amount']:,.0f} | המרה: {rate}\n\nשבוע מוצלח! 🍸",
+                parse_mode="Markdown")
+        except Exception as e:
+            logger.warning(f"weekly [{usr['id']}]: {e}")
 
 async def job_monthly_report(app):
-    now  = datetime.now(TZ)
-    s    = db_stats_since(now.replace(day=1, hour=0, minute=0, second=0).strftime("%Y-%m-%dT%H:%M:%S"))
-    rate = f"{s['won_count']/s['total']*100:.0f}%" if s["total"] else "—"
-    await app.bot.send_message(
-        chat_id=OWNER_CHAT_ID,
-        text=f"📆 *דוח חודשי — {now.strftime('%m/%Y')}*\n\n"
-             f"לידים: {s['total']} | ✅ נסגרו: {s['won_count']} | ❌ אבדו: {s['lost']}\n"
-             f"💰 הכנסות: ₪{s['won_amount']:,.0f} | המרה: {rate}\n\nחודש מוצלח! 💪",
-        parse_mode="Markdown")
+    now   = datetime.now(TZ)
+    since = now.replace(day=1, hour=0, minute=0, second=0).strftime("%Y-%m-%dT%H:%M:%S")
+    for usr in db_users_with_telegram():
+        s = db_stats_since(since, usr["id"])
+        if not s["total"]:
+            continue
+        rate = f"{s['won_count']/s['total']*100:.0f}%" if s["total"] else "—"
+        try:
+            await app.bot.send_message(
+                chat_id=usr["telegram_chat_id"],
+                text=f"📆 *דוח חודשי — {now.strftime('%m/%Y')}*\n\n"
+                     f"לידים: {s['total']} | ✅ נסגרו: {s['won_count']} | ❌ אבדו: {s['lost']}\n"
+                     f"💰 הכנסות: ₪{s['won_amount']:,.0f} | המרה: {rate}\n\nחודש מוצלח! 💪",
+                parse_mode="Markdown")
+        except Exception as e:
+            logger.warning(f"monthly [{usr['id']}]: {e}")
 
 async def job_stale_leads(app):
-    stale = db_get_stale_leads()
-    if not stale:
-        return
-    lines = [f"🔔 *{len(stale)} לידים מחכים לעדכון (3+ ימים):*\n"]
-    for ld in stale[:10]:
-        try:
-            upd      = datetime.strptime(ld["updated_at"][:19], "%Y-%m-%dT%H:%M:%S")
-            days_ago = (datetime.now(TZ).replace(tzinfo=None) - upd).days
-        except Exception:
-            days_ago = "?"
-        lines.append(f"📞 *{ld['name']}* — {ld.get('phone', '—')} _(לפני {days_ago} ימים)_")
-    await app.bot.send_message(
-        chat_id=OWNER_CHAT_ID,
-        text="\n".join(lines) + "\n\nפתח את האפליקציה לעדכון סטטוס 👆",
-        parse_mode="Markdown")
-    # Web Push
-    push_to_all("🔔 לידים ממתינים", f"{len(stale)} לידים ללא עדכון 3+ ימים")
+    now = datetime.now(TZ)
+    for usr in db_list_users():
+        uid   = usr["id"]
+        stale = db_get_stale_leads(uid)
+        if not stale:
+            continue
+        lines = [f"🔔 *{len(stale)} לידים מחכים לעדכון (3+ ימים):*\n"]
+        for ld in stale[:10]:
+            try:
+                upd      = datetime.strptime(ld["updated_at"][:19], "%Y-%m-%dT%H:%M:%S")
+                days_ago = (now.replace(tzinfo=None) - upd).days
+            except Exception:
+                days_ago = "?"
+            lines.append(f"📞 *{ld['name']}* — {ld.get('phone', '—')} _(לפני {days_ago} ימים)_")
+        chat = db_get_user_chat_id(uid)
+        if chat:
+            try:
+                await app.bot.send_message(
+                    chat_id=chat,
+                    text="\n".join(lines) + "\n\nפתח את האפליקציה לעדכון סטטוס 👆",
+                    parse_mode="Markdown")
+            except Exception as e:
+                logger.warning(f"stale tg [{uid}]: {e}")
+        for sub in db_get_push_subscriptions_for_user(uid):
+            _send_push_one(sub, "🔔 לידים ממתינים", f"{len(stale)} לידים ללא עדכון 3+ ימים", "/", "")
 
 async def job_backup(app):
     """Nightly off-database backup: send an Excel of ALL leads to the owner via Telegram."""
     try:
+        if not OWNER_CHAT_ID:
+            return  # no owner chat configured — skip backup
         leads = db_get_all()
         if not leads:
             return  # nothing to back up
@@ -1544,8 +1712,8 @@ def _build_bot_app() -> Application:
 async def _setup_webhook() -> None:
     """Start the bot in webhook mode — eliminates Telegram Conflict on redeploy."""
     global _tg_app
-    if not BOT_TOKEN or not OWNER_CHAT_ID:
-        logger.warning("BOT_TOKEN/OWNER_CHAT_ID not set — Telegram bot disabled")
+    if not BOT_TOKEN:
+        logger.warning("BOT_TOKEN not set — Telegram bot disabled")
         return
     if not APP_URL:
         logger.warning("APP_URL not set — cannot register webhook; Telegram bot disabled")
@@ -1917,6 +2085,29 @@ def get_vapid_public_key():
     _, pub = get_vapid_keys()
     return {"publicKey": pub}
 
+# ── Telegram linking ──────────────────────────────────────────────────────────
+
+@fastapi_app.get("/api/telegram/link")
+def telegram_link_info(user: dict = Depends(get_current_user)):
+    """Return the per-user link code + deep link, and whether Telegram is connected."""
+    code      = db_get_or_create_link_code(user["id"])
+    connected = bool(db_get_user_chat_id(user["id"]))
+    deep_link = f"https://t.me/{BOT_USERNAME}?start={code}" if BOT_USERNAME else ""
+    return {
+        "code":       code,
+        "deep_link":  deep_link,
+        "bot_username": BOT_USERNAME,
+        "connected":  connected,
+        "enabled":    bool(BOT_TOKEN),
+    }
+
+@fastapi_app.post("/api/telegram/unlink")
+def telegram_unlink(user: dict = Depends(get_current_user)):
+    with _db() as conn:
+        cur = conn.cursor()
+        cur.execute("UPDATE users SET telegram_chat_id='' WHERE id=%s", (user["id"],))
+    return {"ok": True}
+
 @fastapi_app.post("/api/push/subscribe")
 def push_subscribe(body: PushSubscribeRequest, user: dict = Depends(get_current_user)):
     db_save_push_subscription(user["id"], json.dumps(body.subscription))
@@ -2094,7 +2285,10 @@ def create_lead(body: LeadCreate, user: dict = Depends(get_current_user)):
         msg += "\n" + SOURCE_HEB.get(body.source, body.source)
     if body.notes:
         msg += "\n" + body.notes
-    _send_tg(msg)
+    # Send the "new lead" confirmation only to the creating user's own linked chat
+    _own_chat = db_get_user_chat_id(user["id"])
+    if _own_chat:
+        _send_tg(msg, chat_id=_own_chat)
     return {"id": lid, "message": "Lead created"}
 
 @fastapi_app.post("/api/leads/import")
