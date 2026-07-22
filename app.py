@@ -2669,6 +2669,87 @@ _GUIDE_HTML = """<!doctype html>
 async def guide_page():
     return HTMLResponse(_GUIDE_HTML)
 
+_AD_HTML = """<!doctype html><html lang="he" dir="rtl"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>מודעת גיוס — Bar Lead Bot</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;700;800;900&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<style>
+ *{margin:0;padding:0;box-sizing:border-box}
+ body{background:#07080d;font-family:'Heebo',Arial,sans-serif;display:flex;flex-direction:column;align-items:center;padding:18px;gap:16px;min-height:100vh}
+ .scaler{width:min(100%,540px);aspect-ratio:1080/1350}
+ #cap{width:1080px;height:1350px;transform-origin:top right;overflow:hidden;position:relative;color:#fff;direction:rtl;
+  background:radial-gradient(680px 560px at 12% 6%,rgba(255,54,120,.60),transparent 62%),radial-gradient(660px 560px at 92% 5%,rgba(150,110,245,.60),transparent 62%),radial-gradient(760px 760px at 50% 44%,rgba(120,70,220,.34),transparent 60%),radial-gradient(560px 560px at 8% 99%,rgba(60,225,255,.30),transparent 60%),radial-gradient(640px 640px at 96% 100%,rgba(255,54,120,.48),transparent 62%),#090a11;}
+ #cap .vig{position:absolute;inset:0;box-shadow:inset 0 0 320px 90px rgba(0,0,0,.72)}
+ #cap .wrap{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;padding:52px 60px}
+ #cap .pill{border:2px solid #ff3c78;background:rgba(255,60,120,.14);color:#ffc2d5;font-weight:700;font-size:30px;padding:12px 34px;border-radius:40px}
+ #cap .glass{font-size:150px;line-height:1;margin:6px 0 -8px;filter:drop-shadow(0 0 26px rgba(255,60,120,.75))}
+ #cap h1{font-weight:900;font-size:98px;line-height:1.02;margin:14px 0 0;letter-spacing:-2px;text-shadow:0 6px 40px rgba(150,110,245,.6)}
+ #cap h1 b{color:#ffd25a}
+ #cap .sub{font-weight:800;font-size:46px;color:#ffd25a;margin-top:10px;text-shadow:0 2px 18px rgba(255,170,60,.5)}
+ #cap .phone{margin:32px 0 0;width:346px;height:452px;border-radius:52px;background:linear-gradient(160deg,#20222f,#14151e);padding:14px;transform:rotate(-5deg);box-shadow:0 40px 90px rgba(0,0,0,.65),0 0 0 3px rgba(120,100,180,.5),0 0 70px rgba(150,110,245,.55)}
+ #cap .scr{width:100%;height:100%;border-radius:40px;background:#0d0f16;padding:20px 16px;position:relative;overflow:hidden}
+ #cap .scr .gloss{position:absolute;top:0;right:0;width:60%;height:55%;background:linear-gradient(215deg,rgba(255,255,255,.10),transparent 60%)}
+ #cap .hero{border-radius:20px;background:linear-gradient(135deg,#3d1a56,#241436);padding:16px 18px;display:flex;align-items:center;justify-content:space-between}
+ #cap .hero .big{font-weight:900;font-size:40px;color:#28cd94;direction:ltr}
+ #cap .hero .lbl{font-size:16px;color:#b9aecf;margin-top:2px}
+ #cap .bars{display:flex;gap:5px;align-items:flex-end;height:52px}
+ #cap .bars i{width:10px;background:#ff6aa0;border-radius:3px}
+ #cap .row{margin-top:12px;background:#191c27;border-radius:14px;padding:10px 12px;display:flex;align-items:center;justify-content:space-between}
+ #cap .row .nm{font-weight:700;font-size:20px}
+ #cap .row .tm{font-size:15px;color:#8b94a7}
+ #cap .av{width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;color:#0a0b12;font-size:20px}
+ #cap .nav{margin-top:14px;background:#161925;border-radius:16px;height:44px;display:flex;align-items:center;justify-content:space-around}
+ #cap .nav i{width:16px;height:16px;border-radius:50%;background:#586179}
+ #cap .nav i.on{background:#ff3c78}
+ #cap .chips{display:flex;gap:16px;margin-top:30px}
+ #cap .chip{background:rgba(20,22,34,.9);border:1px solid #7a63c0;border-radius:30px;padding:12px 22px;font-size:25px;font-weight:600;display:flex;align-items:center;gap:10px}
+ #cap .chip .ck{width:26px;height:26px;border-radius:50%;background:#28cd94;color:#0a0b12;font-size:18px;display:flex;align-items:center;justify-content:center;font-weight:900}
+ #cap .cta{margin-top:32px;background:linear-gradient(90deg,#ff5a8c,#d024a2);border-radius:52px;padding:26px 70px;font-weight:900;font-size:52px;box-shadow:0 20px 60px rgba(255,60,120,.6),0 0 40px rgba(255,60,120,.5)}
+ #cap .foot{position:absolute;bottom:34px;left:0;right:0;text-align:center;color:#8b94a7;font-size:26px;font-weight:500}
+ .dlbtn{background:linear-gradient(90deg,#ff5a8c,#d024a2);color:#fff;border:none;font-family:inherit;font-weight:800;font-size:19px;padding:15px 34px;border-radius:40px;cursor:pointer;box-shadow:0 10px 30px rgba(255,60,120,.4)}
+ .hint{color:#8b94a7;font-size:14px;text-align:center;max-width:540px}
+</style></head><body>
+<div class="scaler"><div id="cap">
+ <div class="vig"></div>
+ <div class="wrap">
+  <div class="pill">5 מקומות בלבד · פיילוט חינם</div>
+  <div class="glass">🍸</div>
+  <h1>מחפשים <b>5</b> בעלי בר</h1>
+  <div class="sub">פיילוט חינם — 30 יום</div>
+  <div class="phone"><div class="scr"><div class="gloss"></div>
+    <div class="hero"><div><div class="big">₪12,400</div><div class="lbl">הכנסות החודש</div></div>
+      <div class="bars"><i style="height:24px"></i><i style="height:40px"></i><i style="height:30px"></i><i style="height:50px"></i><i style="height:34px"></i></div></div>
+    <div class="row"><div><div class="nm">דנה</div><div class="tm">היום 18:00</div></div><div class="av" style="background:#28cd94">ד</div></div>
+    <div class="row"><div><div class="nm">יוסי</div><div class="tm">היום 20:30</div></div><div class="av" style="background:#ff3c78">י</div></div>
+    <div class="row"><div><div class="nm">מאור</div><div class="tm">מחר 12:00</div></div><div class="av" style="background:#ffd25a">מ</div></div>
+    <div class="nav"><i></i><i></i><i class="on"></i><i></i><i></i></div>
+  </div></div>
+  <div class="chips">
+    <div class="chip"><span class="ck">✓</span>בלי לפספס ליד</div>
+    <div class="chip"><span class="ck">✓</span>תזכורת לכל שיחה</div>
+    <div class="chip"><span class="ck">✓</span>הכל מהנייד</div>
+  </div>
+  <div class="cta">שלחו לי הודעה ‹‹</div>
+ </div>
+ <div class="foot">Bar Lead Bot · ניהול לידים לאנשי אירועים</div>
+</div></div>
+<button class="dlbtn" onclick="dl(this)">📥 הורדת התמונה</button>
+<div class="hint">לחצו על הכפתור כדי לשמור את המודעה כתמונה (PNG) — מוכן לשיתוף באינסטגרם, סטטוס וואטסאפ וקבוצות.</div>
+<script>
+function fit(){var c=document.getElementById('cap');var w=c.parentElement.clientWidth;c.style.transform='scale('+(w/1080)+')';}
+window.addEventListener('load',fit);window.addEventListener('resize',fit);
+async function dl(btn){btn.textContent='מכין...';var c=document.getElementById('cap');var old=c.style.transform;c.style.transform='none';
+ try{var cv=await html2canvas(c,{width:1080,height:1350,scale:2,backgroundColor:null,useCORS:true});
+   var a=document.createElement('a');a.href=cv.toDataURL('image/png');a.download='Bar_Lead_Bot_ad.png';a.click();}
+ catch(e){alert('שגיאה: '+e);} c.style.transform=old;fit();btn.textContent='📥 הורדת התמונה';}
+</script></body></html>"""
+
+@fastapi_app.get("/ad", response_class=HTMLResponse)
+async def ad_page():
+    return HTMLResponse(_AD_HTML)
+
 @fastapi_app.get("/{full_path:path}")
 async def serve_index(full_path: str):
     index_path = os.path.join(STATIC_DIR, "index.html")
