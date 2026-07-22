@@ -72,6 +72,7 @@ SMTP_USER         = os.getenv("SMTP_USER", "")
 SMTP_PASS         = os.getenv("SMTP_PASS", "")
 APP_URL           = os.getenv("APP_URL", "")
 OPEN_REGISTRATION = os.getenv("OPEN_REGISTRATION", "true").lower() != "false"
+ADMIN_USERNAMES   = {u.strip().lower() for u in os.getenv("ADMIN_USERNAMES", "").split(",") if u.strip()}
 TZ                = ZoneInfo("Asia/Jerusalem")
 STATIC_DIR        = os.path.dirname(os.path.abspath(__file__))
 
@@ -226,6 +227,13 @@ def ensure_db():
                 created_at   TEXT
             )
         """)
+        # PWA installs (one row per user who installed the app to home screen)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS pwa_installs (
+                user_id    TEXT PRIMARY KEY,
+                created_at TEXT
+            )
+        """)
         # App settings (VAPID keys, etc.)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS settings (
@@ -348,6 +356,44 @@ def db_get_user_by_chat_id(chat_id: str) -> Optional[dict]:
         cur.execute("SELECT * FROM users WHERE telegram_chat_id=%s", (str(chat_id),))
         row = cur.fetchone()
     return dict(row) if row else None
+
+def db_set_admin(user_id: str, is_admin: bool = True) -> None:
+    with _db() as conn:
+        cur = conn.cursor()
+        cur.execute("UPDATE users SET is_admin=%s WHERE id=%s", (is_admin, user_id))
+
+def db_record_install(user_id: str) -> None:
+    """Record a PWA install for a user (idempotent — one per user)."""
+    with _db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO pwa_installs (user_id, created_at) VALUES (%s,%s) "
+            "ON CONFLICT (user_id) DO NOTHING",
+            (user_id, _now())
+        )
+
+def db_admin_metrics() -> dict:
+    """System-wide metrics for the owner dashboard."""
+    with _db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM users");                                    users_total = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM leads");                                     leads_total = cur.fetchone()[0]
+        cur.execute("SELECT COALESCE(SUM(sale_amount),0) FROM leads WHERE status='won'"); revenue = float(cur.fetchone()[0])
+        cur.execute("SELECT COUNT(*) FROM users WHERE telegram_chat_id IS NOT NULL AND telegram_chat_id<>''"); tg_linked = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(DISTINCT user_id) FROM push_subscriptions");         push_users = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM pwa_installs");                              installs = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(DISTINCT user_id) FROM leads");                      active_users = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM sessions WHERE expires_at > %s", (_now(),)); sessions = cur.fetchone()[0]
+    return {
+        "total_users":      users_total,
+        "total_leads":      leads_total,
+        "total_revenue":    revenue,
+        "telegram_linked":  tg_linked,
+        "push_subscribed":  push_users,
+        "pwa_installs":     installs,
+        "active_users":     active_users,
+        "active_sessions":  sessions,
+    }
 
 def db_delete_session(token: str):
     with _db() as conn:
@@ -1941,6 +1987,10 @@ def login(body: LoginRequest, request: Request):
     if not user or not verify_password(body.password, user["password_hash"]):
         raise HTTPException(401, "שם משתמש או סיסמה שגויים")
     _clear_rate_limit(request.client.host if request.client else "unknown")
+    # Auto-promote configured owner accounts to admin
+    if user["username"].lower() in ADMIN_USERNAMES and not user.get("is_admin"):
+        db_set_admin(user["id"], True)
+        user["is_admin"] = True
     token = db_create_session(user["id"])
     return {
         "token": token,
@@ -2459,18 +2509,13 @@ def admin_list_users(admin: dict = Depends(require_admin)):
 
 @fastapi_app.get("/api/admin/stats")
 def admin_stats(admin: dict = Depends(require_admin)):
-    with _db() as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT COUNT(*) FROM leads")
-        total_leads = cur.fetchone()[0]
-        cur.execute("SELECT COUNT(*) FROM users")
-        total_users = cur.fetchone()[0]
-        cur.execute("SELECT COALESCE(SUM(sale_amount),0) FROM leads WHERE status=\'won\'")
-        total_revenue = float(cur.fetchone()[0])
-        cur.execute("SELECT COUNT(*) FROM sessions WHERE expires_at > %s", (_now(),))
-        active_sessions = cur.fetchone()[0]
-    return {"total_leads": total_leads, "total_users": total_users,
-            "total_revenue": total_revenue, "active_sessions": active_sessions}
+    return db_admin_metrics()
+
+@fastapi_app.post("/api/track/install")
+def track_install(user: dict = Depends(get_current_user)):
+    """Called by the client when the PWA is installed to the home screen."""
+    db_record_install(user["id"])
+    return {"ok": True}
 
 @fastapi_app.delete("/api/admin/users/{uid}")
 def admin_delete_user(uid: str, admin: dict = Depends(require_admin)):

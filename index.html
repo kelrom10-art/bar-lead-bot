@@ -899,6 +899,16 @@ function _updateOnlineStatus() {
 window.addEventListener('online',  _updateOnlineStatus);
 window.addEventListener('offline', _updateOnlineStatus);
 
+// ── Track PWA install (for the admin dashboard) ─────────────────────────────
+function _trackInstall() {
+  try { apiFetch('/api/track/install', {method:'POST'}).catch(()=>{}); } catch(e){}
+}
+window.addEventListener('appinstalled', _trackInstall);
+// If already running as an installed PWA, record it once per session
+if (window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true) {
+  window.addEventListener('load', () => { try { if(!sessionStorage.getItem('inst')){sessionStorage.setItem('inst','1'); setTimeout(_trackInstall, 3000);} } catch(e){ setTimeout(_trackInstall,3000);} });
+}
+
 // ── Keyboard shortcuts ─────────────────────────────────────────────────────
 document.addEventListener('keydown', e => {
   // Escape closes any open modal
@@ -1982,10 +1992,14 @@ async function loadAdmin(){
     let html=`
       <div class="section-title" style="margin-top:4px">📊 סטטיסטיקות מערכת</div>
       <div class="stat-grid">
-        <div class="stat-card"><div class="stat-num">${stats?.total_users||0}</div><div class="stat-lbl">משתמשים</div></div>
-        <div class="stat-card stat-active"><div class="stat-num stat-active">${stats?.total_leads||0}</div><div class="stat-lbl">לידים</div></div>
-        <div class="stat-card stat-won"><div class="stat-num stat-won" style="font-size:18px">&#8362;${((stats?.total_revenue||0)).toLocaleString('he-IL',{maximumFractionDigits:0})}</div><div class="stat-lbl">הכנסות</div></div>
-        <div class="stat-card"><div class="stat-num">${stats?.active_sessions||0}</div><div class="stat-lbl">סשנים</div></div>
+        <div class="stat-card"><div class="stat-num">${stats?.total_users||0}</div><div class="stat-lbl">👥 משתמשים</div></div>
+        <div class="stat-card stat-active"><div class="stat-num stat-active">${stats?.pwa_installs||0}</div><div class="stat-lbl">📥 הורידו אפליקציה</div></div>
+        <div class="stat-card stat-purple"><div class="stat-num stat-purple">${stats?.telegram_linked||0}</div><div class="stat-lbl">✈️ בוטים מחוברים</div></div>
+        <div class="stat-card"><div class="stat-num">${stats?.push_subscribed||0}</div><div class="stat-lbl">🔔 התראות פעילות</div></div>
+        <div class="stat-card stat-active"><div class="stat-num stat-active">${stats?.active_users||0}</div><div class="stat-lbl">🟢 משתמשים פעילים</div></div>
+        <div class="stat-card"><div class="stat-num">${stats?.total_leads||0}</div><div class="stat-lbl">📋 לידים</div></div>
+        <div class="stat-card stat-won"><div class="stat-num stat-won" style="font-size:18px">&#8362;${((stats?.total_revenue||0)).toLocaleString('he-IL',{maximumFractionDigits:0})}</div><div class="stat-lbl">💰 הכנסות</div></div>
+        <div class="stat-card"><div class="stat-num">${stats?.active_sessions||0}</div><div class="stat-lbl">🔑 סשנים</div></div>
       </div>
       <div class="section-title">👥 משתמשים</div>`;
     for(const u of users){
