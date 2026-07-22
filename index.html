@@ -151,17 +151,32 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
 .chart-wrap-bar{height:150px;position:relative}
 
 /* ── CALENDAR ── */
-.calendar-grid{display:grid;grid-template-columns:repeat(7,minmax(100px,1fr));gap:6px;overflow-x:auto;padding-bottom:8px}
-.cal-day{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:8px 5px;min-height:90px}
-.cal-today{border-color:var(--accent)!important}
-.cal-day-header{text-align:center;padding-bottom:6px;border-bottom:1px solid var(--border);margin-bottom:6px}
-.cal-day-name{font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:.5px}
-.cal-day-num{font-size:17px;font-weight:900}
-.cal-today .cal-day-num{color:var(--accent)}
-.cal-event{border-radius:6px;padding:4px 5px;margin-bottom:3px;border-right:3px solid var(--accent);cursor:pointer;font-size:11px;background:rgba(255,255,255,.04);transition:background .15s}
-.cal-event:hover{background:rgba(255,255,255,.1)}
-.cal-event-time{color:var(--text2);font-size:9px}
-.cal-event-name{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:90px}
+/* week strip */
+.cal-strip{display:flex;gap:5px;margin-bottom:16px}
+.cal-pill{flex:1;background:var(--card);border:1px solid var(--border);border-radius:14px;padding:9px 2px 7px;text-align:center;cursor:pointer;transition:transform .1s,background .15s;-webkit-tap-highlight-color:transparent}
+.cal-pill:active{transform:scale(.94)}
+.cal-pill.today{background:linear-gradient(150deg,rgba(232,65,90,.28),rgba(232,65,90,.08));border-color:var(--accent)}
+.cal-pill .dn{font-size:11px;color:var(--text2);font-weight:700}
+.cal-pill .dd{font-size:19px;font-weight:900;margin-top:1px;line-height:1.1}
+.cal-pill.today .dd{color:var(--accent)}
+.cal-pill .cdot{width:6px;height:6px;border-radius:50%;background:var(--blue);margin:4px auto 0}
+.cal-pill .cdot.empty{background:transparent}
+/* agenda */
+.cal-agenda{display:flex;flex-direction:column;gap:16px}
+.cal-daysec{scroll-margin-top:80px}
+.cal-dh{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.cal-dh .dname{font-weight:800;font-size:15px}
+.cal-dh .ddate{font-size:12px;color:var(--text2)}
+.cal-dh .todaytag{background:var(--accent);color:#fff;font-size:10px;font-weight:800;border-radius:10px;padding:2px 9px}
+.cal-dh .ln{flex:1;height:1px;background:var(--border)}
+.cal-ev2{display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--border);border-right:3px solid var(--accent);border-radius:13px;padding:11px 13px;margin-bottom:7px;cursor:pointer;transition:background .15s}
+.cal-ev2:active{background:rgba(255,255,255,.06)}
+.cal-ev2 .evtime{font-weight:800;font-size:15px;min-width:50px;text-align:center}
+.cal-ev2 .evwho{flex:1;min-width:0}
+.cal-ev2 .evname{font-weight:700;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cal-ev2 .evsrc{font-size:11px;color:var(--text2)}
+.cal-ev2 .evst{width:11px;height:11px;border-radius:50%;flex-shrink:0}
+.cal-empty2{color:var(--text3);font-size:12px;padding:2px 2px 4px 0}
 .week-nav{display:flex;align-items:center;gap:8px}
 .week-nav-btn{background:rgba(255,255,255,.07);border:none;color:var(--text);border-radius:8px;width:30px;height:30px;cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center;font-family:inherit}
 .week-nav-btn:hover{background:rgba(255,255,255,.14)}
@@ -1947,31 +1962,55 @@ async function loadCalendar() {
     `${start.getDate()}/${start.getMonth()+1} - ${end.getDate()}/${end.getMonth()+1}`;
   try {
     const data=await apiFetch(`/api/leads/calendar?from_dt=${encodeURIComponent(fmt(start))}&to_dt=${encodeURIComponent(fmt(end))}`).then(r=>r.json());
-    const DAY=['ראשון','שני','שלישי','רביעי','חמישי','שישי','שבת'];
+    const DAYL=['ראשון','שני','שלישי','רביעי','חמישי','שישי','שבת'];
+    const DAYS=['א','ב','ג','ד','ה','ו','ש'];
     const todayKey=new Date().toISOString().slice(0,10);
-    let html='<div class="calendar-grid">';
+    const days=[];
     for (let i=0;i<7;i++){
       const d=new Date(start); d.setDate(d.getDate()+i);
       const key=`${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
-      const isToday=key===todayKey;
-      const events=data[key]||[];
-      html+=`<div class="cal-day${isToday?' cal-today':''}">
-        <div class="cal-day-header">
-          <div class="cal-day-name">${DAY[d.getDay()]}</div>
-          <div class="cal-day-num">${d.getDate()}/${d.getMonth()+1}</div>
-        </div>`;
-      if (events.length===0) html+=`<div style="color:var(--text3);font-size:10px;text-align:center;padding-top:4px">—</div>`;
-      for (const ev of events){
-        const t=ev.call_time?ev.call_time.slice(11,16):'';
-        html+=`<div class="cal-event" style="border-right-color:${ST_COLOR[ev.status]||'var(--accent)'}" onclick="openLead('${ev.id}')">
-          <div class="cal-event-time">${t}</div>
-          <div class="cal-event-name">${esc(ev.name)}</div>
-        </div>`;
-      }
-      html+='</div>';
+      const evs=(data[key]||[]).slice().sort((a,b)=>String(a.call_time||'').localeCompare(String(b.call_time||'')));
+      days.push({d,key,isToday:key===todayKey,evs});
     }
-    html+='</div>';
-    document.getElementById('calendar-content').innerHTML=html;
+    const totalEvents=days.reduce((s,x)=>s+x.evs.length,0);
+    // week strip
+    let strip='<div class="cal-strip">';
+    for (const x of days){
+      strip+=`<div class="cal-pill${x.isToday?' today':''}" onclick="document.getElementById('cald-${x.key}').scrollIntoView({behavior:'smooth',block:'start'})">
+        <div class="dn">${DAYS[x.d.getDay()]}</div>
+        <div class="dd">${x.d.getDate()}</div>
+        <div class="cdot${x.evs.length?'':' empty'}"></div>
+      </div>`;
+    }
+    strip+='</div>';
+    // agenda
+    let agenda='<div class="cal-agenda">';
+    for (const x of days){
+      agenda+=`<div class="cal-daysec" id="cald-${x.key}">
+        <div class="cal-dh">
+          <span class="dname">${DAYL[x.d.getDay()]}</span>
+          <span class="ddate">${x.d.getDate()}/${x.d.getMonth()+1}</span>
+          ${x.isToday?'<span class="todaytag">היום</span>':''}
+          <span class="ln"></span>
+        </div>`;
+      if (!x.evs.length){
+        agenda+=`<div class="cal-empty2">אין שיחות</div>`;
+      } else {
+        for (const ev of x.evs){
+          const t=ev.call_time?ev.call_time.slice(11,16):'—';
+          const src=ev.source?`${SRC_EMO[ev.source]||''} ${SRC_LBL[ev.source]||ev.source}`:'';
+          agenda+=`<div class="cal-ev2" style="border-right-color:${ST_COLOR[ev.status]||'var(--accent)'}" onclick="openLead('${ev.id}')">
+            <div class="evtime" style="color:${ST_COLOR[ev.status]||'var(--text)'}">${t}</div>
+            <div class="evwho"><div class="evname">${esc(ev.name)}</div>${src?`<div class="evsrc">${src}</div>`:''}</div>
+            <div class="evst" style="background:${ST_COLOR[ev.status]||'var(--accent)'}"></div>
+          </div>`;
+        }
+      }
+      agenda+='</div>';
+    }
+    agenda+='</div>';
+    const summary=`<div style="text-align:center;color:var(--text2);font-size:13px;margin-bottom:12px">${totalEvents? '📅 '+totalEvents+' שיחות השבוע' : 'אין שיחות מתוכננות השבוע'}</div>`;
+    document.getElementById('calendar-content').innerHTML=strip+summary+agenda;
   } catch(e){
     document.getElementById('calendar-content').innerHTML='<div class="empty"><div class="empty-icon">⚠️</div><div>שגיאה</div></div>';
   }
