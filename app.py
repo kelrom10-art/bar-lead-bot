@@ -2447,11 +2447,12 @@ def admin_list_users(admin: dict = Depends(require_admin)):
     with _db() as conn:
         cur = conn.cursor()
         cur.execute("""
-            SELECT u.id, u.username, u.display_name, u.role, u.created_at,
+            SELECT u.id, u.username, u.display_name, u.is_admin, u.created_at,
                    COUNT(l.id) as lead_count
             FROM users u
             LEFT JOIN leads l ON l.user_id = u.id
-            GROUP BY u.id ORDER BY u.created_at DESC
+            GROUP BY u.id, u.username, u.display_name, u.is_admin, u.created_at
+            ORDER BY u.created_at DESC
         """)
         rows = [dict(zip([d[0] for d in cur.description], r)) for r in cur.fetchall()]
     return rows
@@ -2466,7 +2467,10 @@ def admin_stats(admin: dict = Depends(require_admin)):
         total_users = cur.fetchone()[0]
         cur.execute("SELECT COALESCE(SUM(sale_amount),0) FROM leads WHERE status=\'won\'")
         total_revenue = float(cur.fetchone()[0])
-    return {"total_leads": total_leads, "total_users": total_users, "total_revenue": total_revenue}
+        cur.execute("SELECT COUNT(*) FROM sessions WHERE expires_at > %s", (_now(),))
+        active_sessions = cur.fetchone()[0]
+    return {"total_leads": total_leads, "total_users": total_users,
+            "total_revenue": total_revenue, "active_sessions": active_sessions}
 
 @fastapi_app.delete("/api/admin/users/{uid}")
 def admin_delete_user(uid: str, admin: dict = Depends(require_admin)):
