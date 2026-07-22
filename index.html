@@ -137,6 +137,9 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
 .tags-row{display:flex;flex-wrap:wrap;gap:6px}
 .tag-btn{background:rgba(255,255,255,.05);border:1px solid var(--border);border-radius:20px;padding:6px 12px;font-size:12px;cursor:pointer;color:var(--text2);font-family:inherit;transition:all .15s}
 .tag-btn.selected{background:rgba(232,65,90,.18);border-color:var(--accent);color:var(--accent);font-weight:700}
+.msg-chips{display:flex;flex-wrap:wrap;gap:6px}
+.msg-chip{background:rgba(255,255,255,.05);border:1px solid var(--border);border-radius:20px;padding:7px 12px;font-size:12.5px;cursor:pointer;color:var(--text2);font-family:inherit;transition:all .15s;white-space:nowrap}
+.msg-chip.selected{background:rgba(79,172,255,.16);border-color:#4facff;color:#4facff;font-weight:700}
 
 /* ── STATS ── */
 .stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px}
@@ -650,6 +653,27 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
   </div>
 </div>
 
+<!-- COMPOSE MESSAGE MODAL -->
+<div class="modal-overlay" id="msg-modal" onclick="if(event.target===this)closeMsgModal()">
+  <div class="modal-sheet">
+    <div class="modal-handle"></div>
+    <div class="section-title" style="margin-top:0">✍️ הודעה מהירה <span id="msg-to" style="color:var(--text2);font-weight:500;font-size:13px"></span></div>
+    <div style="font-size:12px;color:var(--text2);margin-bottom:8px">בחר סוג הודעה — ננסח לך, ותפתח בוואטסאפ בקליק:</div>
+    <div id="msg-intents" class="msg-chips"></div>
+    <div style="display:flex;align-items:center;gap:8px;margin:10px 0 6px">
+      <span style="font-size:12px;color:var(--text2)">טון:</span>
+      <div id="msg-tones" class="msg-chips" style="margin:0"></div>
+    </div>
+    <textarea id="msg-text" class="form-input" rows="6" dir="rtl"
+      style="resize:vertical;line-height:1.5;font-size:15px" placeholder="בחר סוג הודעה למעלה, או כתוב כאן חופשי..."></textarea>
+    <div style="display:flex;gap:6px;margin-top:6px">
+      <button class="btn btn-gray btn-sm" style="flex:1" onclick="aiRewrite()" id="msg-ai-btn">✨ נסח מחדש</button>
+      <button class="btn btn-gray btn-sm" style="flex:1" onclick="copyMsg()">📋 העתק</button>
+    </div>
+    <button class="btn btn-wa btn-full" style="margin-top:8px" onclick="sendWhatsappMsg()">💬 פתח בוואטסאפ</button>
+  </div>
+</div>
+
 <!-- EDIT MODAL -->
 <div class="modal-overlay" id="edit-modal" onclick="closeEditModal(event)">
   <div class="modal-sheet">
@@ -929,6 +953,7 @@ if (window.matchMedia('(display-mode: standalone)').matches || window.navigator.
 document.addEventListener('keydown', e => {
   // Escape closes any open modal
   if (e.key === 'Escape') {
+    if (document.getElementById('msg-modal')?.classList.contains('open')) { closeMsgModal(); return; }
     if (document.getElementById('quick-modal')?.classList.contains('open')) { closeQuickAdd(); return; }
     const editM = document.getElementById('edit-modal');
     if (editM?.classList.contains('open')) { editM.classList.remove('open'); return; }
@@ -1628,6 +1653,7 @@ async function openLead(id) {
   currentLeadId=id;
   try {
     const l=await apiFetch('/api/leads/'+id).then(r=>r.json());
+    window._curLead=l;
     const amtHtml=l.status==='won'&&l.sale_amount?`
       <div class="card" style="background:rgba(0,212,160,.07);border-color:rgba(0,212,160,.25);margin-bottom:12px">
         <div style="color:var(--green);font-size:22px;font-weight:900">&#128176; &#8362;${Number(l.sale_amount).toLocaleString()}</div>
@@ -1652,7 +1678,7 @@ async function openLead(id) {
           <span class="badge ${badgeClass(l.status)}" style="font-size:13px">${l.status_emoji} ${l.status_heb}</span>
           <div style="display:flex;gap:6px">
             <a href="tel:${esc(l.phone)}" class="btn btn-green btn-sm" style="text-decoration:none">📞 התקשר</a>
-            <a href="${waLink(l.phone)}" target="_blank" class="btn btn-wa btn-sm" style="text-decoration:none">💬 WhatsApp</a>
+            <button class="btn btn-wa btn-sm" onclick="openMsgModal('${id}')">✍️ הודעה</button>
           </div>
         </div>
         ${l.call_time?`<div style="color:var(--text2);font-size:13px;margin-top:6px">📅 שיחה: ${fmtDT(l.call_time)}</div>`:''}
@@ -2162,6 +2188,112 @@ function maybeConsumeShare(){
   if(!s) return;
   try{ sessionStorage.removeItem('sharedLead'); }catch(e){}
   setTimeout(()=>fillQuickFrom(s), 600);
+}
+
+// ── Message drafting (templates + AI) ────────────────────────────────────
+const MSG_INTENTS = [
+  {key:'intro',    label:'👋 היכרות'},
+  {key:'followup', label:'🔄 פולואפ'},
+  {key:'quote',    label:'💰 הצעת מחיר'},
+  {key:'reminder', label:'⏰ תזכורת'},
+  {key:'thanks',   label:'🙏 תודה'},
+  {key:'noanswer', label:'📞 לא ענה'},
+];
+const MSG_TONES = [
+  {key:'friendly', label:'ידידותי'},
+  {key:'formal',   label:'רשמי'},
+  {key:'short',    label:'קצר'},
+];
+const MSG_TPL = {
+  intro:{
+    friendly:['היי {n}! נעים להכיר 🙌 קיבלנו את הפנייה שלך ל{b}. ספר/י לי קצת על האירוע — כמה אנשים ומתי בערך? נשמח להתאים לך בדיוק מה שצריך 🍸'],
+    formal:['שלום {n}, תודה על פנייתך ל{b}. נשמח לקבל פרטים על האירוע (תאריך, מספר משתתפים ואופי האירוע) על מנת להיערך בהתאם ולהכין עבורך הצעה מתאימה.'],
+    short:['היי {n}! קיבלנו את הפנייה ל{b} 🍸 מתי האירוע וכמה אנשים בערך?'],
+  },
+  followup:{
+    friendly:['היי {n}, מה שלומך? 😊 רק בודק אם הספקת לחשוב על מה שדיברנו לגבי האירוע ב{b}. אשמח לענות על כל שאלה ולעזור להתקדם.'],
+    formal:['שלום {n}, אני פונה כמעקב לפנייתך בנוגע לאירוע ב{b}. אשמח לדעת האם יש שאלות נוספות או פרטים שנוכל לסייע בהם על מנת להתקדם.'],
+    short:['היי {n}, מתקדמים עם האירוע ב{b}? 🙂 כאן לכל שאלה.'],
+  },
+  quote:{
+    friendly:['היי {n}! ריכזתי עבורך הצעה לאירוע ב{b}: [פרט/י כאן חבילה, מה כלול ומחיר]. ההצעה תקפה ל-7 ימים 🥂 נשמח לסגור — מה דעתך?'],
+    formal:['שלום {n}, בהמשך לשיחתנו, מצורפת הצעת מחיר לאירוע ב{b}: [פירוט חבילה, הכלול ומחיר]. ההצעה בתוקף למשך 7 ימים. אשמח לעמוד לרשותך לכל הבהרה.'],
+    short:['היי {n}! הצעה לאירוע ב{b}: [חבילה + מחיר]. תקף 7 ימים 🥂 מתאים?'],
+  },
+  reminder:{
+    friendly:['היי {n}! רק להזכיר שהאירוע שלנו ב{b} מתקרב 🎉 הכל מוכן מצידנו. אם יש שינויים אחרונים או בקשות — עדכן/י אותי ונדאג לזה!'],
+    formal:['שלום {n}, תזכורת לקראת האירוע ב{b}. אנו ערוכים בהתאם לתיאום. במידה וישנם עדכונים אחרונים נשמח לקבלם מבעוד מועד.'],
+    short:['היי {n}! מזכיר שהאירוע ב{b} מתקרב 🎉 הכל מוכן. שינויים אחרונים?'],
+  },
+  thanks:{
+    friendly:['היי {n}! תודה ענקית שבחרת ב{b} 🙏 היה בכיף אמיתי לארח אתכם. אם נהניתם — נשמח אם תמליצו עלינו ותשתפו חברים 💛'],
+    formal:['שלום {n}, תודה שבחרת לקיים את האירוע ב{b}. היה לנו לעונג לארח אתכם. נשמח להמלצה או לחוות דעת שתסייע לנו להמשיך ולהשתפר.'],
+    short:['היי {n}! תודה שבחרת ב{b} 🙏 היה מעולה. נשמח להמלצה 💛'],
+  },
+  noanswer:{
+    friendly:['היי {n}, ניסיתי להשיג אותך לגבי האירוע ב{b} ולא הצלחתי 📞 מתי נוח לך שאחזור? אפשר גם פשוט להשיב כאן בהודעה 🙂'],
+    formal:['שלום {n}, ניסיתי ליצור עמך קשר טלפוני בנוגע לאירוע ב{b} וללא מענה. אשמח לתאם שיחה בזמן הנוח לך.'],
+    short:['היי {n}, ניסיתי להתקשר לגבי האירוע ב{b} 📞 מתי נוח שאחזור?'],
+  },
+};
+let _msgIntent='followup', _msgTone='friendly';
+function _barName(){
+  try{ const u=JSON.parse(localStorage.getItem('user_info')||'{}'); return (u.display_name||u.username||'').trim(); }catch(e){ return ''; }
+}
+function _localDraft(intent,tone){
+  const bank=(MSG_TPL[intent]||MSG_TPL.followup);
+  const arr=bank[tone]||bank.friendly;
+  const t=arr[Math.floor(Math.random()*arr.length)];
+  const l=window._curLead||{};
+  const n=(l.name||'').trim().split(' ')[0]||'שם';
+  const b=_barName()||'העסק שלנו';
+  return t.replace(/\{n\}/g,n).replace(/\{b\}/g,b);
+}
+function renderMsgChips(){
+  document.getElementById('msg-intents').innerHTML=MSG_INTENTS.map(i=>
+    `<button class="msg-chip${i.key===_msgIntent?' selected':''}" onclick="pickIntent('${i.key}')">${i.label}</button>`).join('');
+  document.getElementById('msg-tones').innerHTML=MSG_TONES.map(t=>
+    `<button class="msg-chip${t.key===_msgTone?' selected':''}" onclick="pickTone('${t.key}')">${t.label}</button>`).join('');
+}
+function pickIntent(k){ _msgIntent=k; renderMsgChips(); document.getElementById('msg-text').value=_localDraft(_msgIntent,_msgTone); }
+function pickTone(k){ _msgTone=k; renderMsgChips(); document.getElementById('msg-text').value=_localDraft(_msgIntent,_msgTone); }
+function openMsgModal(id){
+  const l=window._curLead||{};
+  if(!l.id) return;
+  _msgIntent='followup'; _msgTone='friendly';
+  document.getElementById('msg-to').textContent = l.name?('· '+l.name):'';
+  renderMsgChips();
+  document.getElementById('msg-text').value=_localDraft(_msgIntent,_msgTone);
+  document.getElementById('msg-modal').classList.add('open');
+}
+function closeMsgModal(){ document.getElementById('msg-modal').classList.remove('open'); }
+async function aiRewrite(){
+  const btn=document.getElementById('msg-ai-btn');
+  const old=btn.textContent; btn.disabled=true; btn.textContent='⏳ מנסח...';
+  const l=window._curLead||{};
+  try{
+    const res=await apiFetch('/api/ai/draft',{method:'POST',body:JSON.stringify({
+      intent:_msgIntent, tone:_msgTone, name:l.name||'', bar:_barName(),
+      context:[l.package_heb?('חבילה: '+l.package_heb):'',l.notes?('הערות: '+l.notes):''].filter(Boolean).join(' | ')
+    })});
+    const data=await res.json();
+    if(data&&data.text){ document.getElementById('msg-text').value=data.text; toast(data.source==='ai'?'✨ נוסח מחדש':'✨ ניסוח חדש'); }
+    else toast('לא הצלחתי לנסח — נסה שוב');
+  }catch(e){ document.getElementById('msg-text').value=_localDraft(_msgIntent,_msgTone); toast('✨ ניסוח חדש'); }
+  finally{ btn.disabled=false; btn.textContent=old; }
+}
+function sendWhatsappMsg(){
+  const l=window._curLead||{};
+  const txt=document.getElementById('msg-text').value.trim();
+  if(!l.phone){ toast('אין מספר טלפון'); return; }
+  const d=l.phone.replace(/\D/g,'').replace(/^0/,'972');
+  window.open('https://wa.me/'+d+(txt?('?text='+encodeURIComponent(txt)):''),'_blank');
+  closeMsgModal();
+}
+async function copyMsg(){
+  const txt=document.getElementById('msg-text').value;
+  try{ await navigator.clipboard.writeText(txt); toast('📋 הועתק'); }
+  catch(e){ toast('בחר והעתק ידנית'); }
 }
 async function submitQuick(e) {
   e.preventDefault();

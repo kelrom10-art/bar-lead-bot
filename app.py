@@ -20,7 +20,7 @@ Optional environment variables:
 """
 
 import asyncio, base64, csv, hashlib, hmac as _hmac, io, json, logging, os
-import secrets, smtplib, threading, time, uuid
+import random, secrets, smtplib, threading, time, uuid
 from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
@@ -1903,6 +1903,13 @@ class ResetPasswordRequest(BaseModel):
 class PushSubscribeRequest(BaseModel):
     subscription: dict
 
+class AIDraftRequest(BaseModel):
+    intent:  str            = Field("followup", max_length=40)
+    tone:    Optional[str]  = "friendly"
+    name:    Optional[str]  = ""
+    bar:     Optional[str]  = ""
+    context: Optional[str]  = ""   # free-form notes about the lead/event
+
 def enrich(d: dict) -> dict:
     d["status_heb"]   = STATUS_HEB.get(d.get("status", ""), d.get("status", ""))
     d["status_emoji"] = STATUS_EMOJI.get(d.get("status", ""), "")
@@ -2358,6 +2365,150 @@ def create_lead(body: LeadCreate, user: dict = Depends(get_current_user)):
     if _own_chat:
         _send_tg(msg, chat_id=_own_chat)
     return {"id": lid, "message": "Lead created"}
+
+# ── AI / template message drafting ──────────────────────────────────────────
+AI_API_KEY = os.getenv("AI_API_KEY", "").strip()
+AI_MODEL   = os.getenv("AI_MODEL", "claude-3-5-haiku-latest").strip()
+
+INTENT_HEB = {
+    "intro":    "הודעת היכרות ראשונה",
+    "followup": "הודעת מעקב (פולואפ)",
+    "quote":    "הצעת מחיר",
+    "reminder": "תזכורת לפני האירוע",
+    "thanks":   "תודה אחרי האירוע",
+    "noanswer": "לא ענה — ניסיון נוסף",
+}
+
+# Fallback phrasing bank (used when no AI key is configured). {n}=first name, {b}=bar name.
+_PHRASES = {
+    "intro": {
+        "friendly": [
+            "היי {n}! נעים להכיר 🙌 קיבלנו את הפנייה שלך ל{b}. ספר/י לי קצת על האירוע — כמה אנשים ומתי בערך? נשמח להתאים לך בדיוק מה שצריך 🍸",
+            "היי {n}! תודה שפנית ל{b} 🙏 אשמח לשמוע מה חוגגים ומתי, כדי שאבנה לך הצעה שמתאימה בול.",
+        ],
+        "formal":   [
+            "שלום {n}, תודה על פנייתך ל{b}. נשמח לקבל פרטים על האירוע (תאריך, מספר משתתפים ואופי האירוע) על מנת להיערך בהתאם ולהכין עבורך הצעה מתאימה.",
+        ],
+        "short":    [
+            "היי {n}! קיבלנו את הפנייה ל{b} 🍸 מתי האירוע וכמה אנשים בערך?",
+        ],
+    },
+    "followup": {
+        "friendly": [
+            "היי {n}, מה שלומך? 😊 רק בודק אם הספקת לחשוב על מה שדיברנו לגבי האירוע ב{b}. אשמח לענות על כל שאלה ולעזור להתקדם.",
+            "היי {n}! חוזר אליך בקשר לאירוע ב{b} 🙌 יש התקדמות מצידך? אני כאן לכל שאלה.",
+        ],
+        "formal":   [
+            "שלום {n}, אני פונה כמעקב לפנייתך בנוגע לאירוע ב{b}. אשמח לדעת האם יש שאלות נוספות או פרטים שנוכל לסייע בהם על מנת להתקדם.",
+        ],
+        "short":    [
+            "היי {n}, מתקדמים עם האירוע ב{b}? 🙂 כאן לכל שאלה.",
+        ],
+    },
+    "quote": {
+        "friendly": [
+            "היי {n}! ריכזתי עבורך הצעה לאירוע ב{b}: [פרט/י כאן חבילה, מה כלול ומחיר]. ההצעה תקפה ל-7 ימים 🥂 נשמח לסגור — מה דעתך?",
+            "היי {n}! הנה ההצעה שלנו לאירוע ב{b}: [חבילה + מחיר]. הכל גמיש וניתן להתאמה. אשמח לשמוע מחשבות 😊",
+        ],
+        "formal":   [
+            "שלום {n}, בהמשך לשיחתנו, מצורפת הצעת מחיר לאירוע ב{b}: [פירוט חבילה, הכלול ומחיר]. ההצעה בתוקף למשך 7 ימים. אשמח לעמוד לרשותך לכל הבהרה.",
+        ],
+        "short":    [
+            "היי {n}! הצעה לאירוע ב{b}: [חבילה + מחיר]. תקף 7 ימים 🥂 מתאים?",
+        ],
+    },
+    "reminder": {
+        "friendly": [
+            "היי {n}! רק להזכיר שהאירוע שלנו ב{b} מתקרב 🎉 הכל מוכן מצידנו. אם יש שינויים אחרונים או בקשות — עדכן/י אותי ונדאג לזה!",
+        ],
+        "formal":   [
+            "שלום {n}, תזכורת לקראת האירוע ב{b}. אנו ערוכים בהתאם לתיאום. במידה וישנם עדכונים אחרונים נשמח לקבלם מבעוד מועד.",
+        ],
+        "short":    [
+            "היי {n}! מזכיר שהאירוע ב{b} מתקרב 🎉 הכל מוכן. שינויים אחרונים?",
+        ],
+    },
+    "thanks": {
+        "friendly": [
+            "היי {n}! תודה ענקית שבחרת ב{b} 🙏 היה בכיף אמיתי לארח אתכם. אם נהניתם — נשמח אם תמליצו עלינו ותשתפו חברים 💛",
+        ],
+        "formal":   [
+            "שלום {n}, תודה שבחרת לקיים את האירוע ב{b}. היה לנו לעונג לארח אתכם. נשמח להמלצה או לחוות דעת שתסייע לנו להמשיך ולהשתפר.",
+        ],
+        "short":    [
+            "היי {n}! תודה שבחרת ב{b} 🙏 היה מעולה. נשמח להמלצה 💛",
+        ],
+    },
+    "noanswer": {
+        "friendly": [
+            "היי {n}, ניסיתי להשיג אותך לגבי האירוע ב{b} ולא הצלחתי 📞 מתי נוח לך שאחזור? אפשר גם פשוט להשיב כאן בהודעה 🙂",
+        ],
+        "formal":   [
+            "שלום {n}, ניסיתי ליצור עמך קשר טלפוני בנוגע לאירוע ב{b} וללא מענה. אשמח לתאם שיחה בזמן הנוח לך.",
+        ],
+        "short":    [
+            "היי {n}, ניסיתי להתקשר לגבי האירוע ב{b} 📞 מתי נוח שאחזור?",
+        ],
+    },
+}
+
+def _first_name(name: str) -> str:
+    return (name or "").strip().split(" ")[0] if name else ""
+
+def _template_draft(intent: str, tone: str, name: str, bar: str) -> str:
+    intent = intent if intent in _PHRASES else "followup"
+    tone   = tone if tone in ("friendly", "formal", "short") else "friendly"
+    bank   = _PHRASES[intent].get(tone) or _PHRASES[intent]["friendly"]
+    text   = random.choice(bank)
+    n = _first_name(name) or "שם"
+    b = (bar or "").strip() or "העסק שלנו"
+    return text.replace("{n}", n).replace("{b}", b)
+
+def _ai_draft_llm(intent: str, tone: str, name: str, bar: str, context: str) -> Optional[str]:
+    """Draft via Anthropic if AI_API_KEY is set; return None on any failure."""
+    if not AI_API_KEY:
+        return None
+    try:
+        tone_heb = {"friendly": "ידידותי וחם", "formal": "רשמי ומקצועי",
+                    "short": "קצר וקולע"}.get(tone, "ידידותי")
+        intent_desc = INTENT_HEB.get(intent, "הודעת מעקב")
+        sys = ("אתה עוזר לבעל בר/מקום אירועים בישראל לכתוב הודעת וואטסאפ ללקוח. "
+               "כתוב בעברית תקינה, בגוף ראשון, קצר וטבעי לשליחה בוואטסאפ. "
+               "אל תוסיף הסברים — רק את גוף ההודעה. מותר אימוג'י אחד-שניים.")
+        user_msg = (f"סוג ההודעה: {intent_desc}\nסגנון: {tone_heb}\n"
+                    f"שם הלקוח: {name or 'לא ידוע'}\nשם העסק: {bar or 'לא ידוע'}\n"
+                    f"פרטים נוספים: {context or 'אין'}")
+        payload = json.dumps({
+            "model": AI_MODEL,
+            "max_tokens": 400,
+            "system": sys,
+            "messages": [{"role": "user", "content": user_msg}],
+        }).encode("utf-8")
+        req = _ureq.Request(
+            "https://api.anthropic.com/v1/messages", data=payload,
+            headers={"content-type": "application/json",
+                     "x-api-key": AI_API_KEY,
+                     "anthropic-version": "2023-06-01"})
+        with _ureq.urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        parts = data.get("content") or []
+        text = "".join(p.get("text", "") for p in parts if p.get("type") == "text").strip()
+        return text or None
+    except Exception as e:
+        logger.warning("AI draft failed, falling back to template: %s", e)
+        return None
+
+@fastapi_app.post("/api/ai/draft")
+def ai_draft(body: AIDraftRequest, user: dict = Depends(get_current_user)):
+    bar = (body.bar or user.get("display_name") or user.get("username") or "").strip()
+    text = _ai_draft_llm(body.intent, body.tone or "friendly",
+                         body.name or "", bar, body.context or "")
+    source = "ai"
+    if not text:
+        text = _template_draft(body.intent, body.tone or "friendly", body.name or "", bar)
+        source = "template"
+    return {"text": text, "source": source,
+            "intent_heb": INTENT_HEB.get(body.intent, "")}
 
 @fastapi_app.post("/api/leads/import")
 async def import_leads_csv(
