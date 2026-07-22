@@ -579,6 +579,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
   <div class="quick-sheet">
     <div class="modal-handle"></div>
     <div class="quick-title">➕ הוסף ליד חדש</div>
+    <button type="button" onclick="pasteFromWhatsapp()" style="width:100%;margin-bottom:14px;background:linear-gradient(135deg,#25d366,#1da851);border:none;color:#fff;font-family:inherit;font-weight:800;font-size:15px;padding:13px;border-radius:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px">📲 הדבק מוואטסאפ — מילוי אוטומטי</button>
     <form id="quick-form" onsubmit="submitQuick(event)">
       <div class="form-group">
         <label class="form-label">👤 שם *</label>
@@ -1068,6 +1069,7 @@ function launchApp(user) {
     document.getElementById(id).classList.remove('active'));
   document.getElementById('app').classList.add('active');
   goTo('today', document.querySelector('.nav-btn'));
+  maybeConsumeShare();
   // Push: if already granted, re-subscribe silently; else show banner
   if ('serviceWorker' in navigator && 'PushManager' in window) {
     if (Notification.permission === 'granted') {
@@ -2104,6 +2106,62 @@ function openQuickAdd() {
 }
 function closeQuickAdd() {
   document.getElementById('quick-modal').classList.remove('open');
+}
+
+// ── WhatsApp lead capture ────────────────────────────────────────────────
+function _extractPhone(text){
+  const d=(text||'').replace(/\D/g,'');
+  let m=d.match(/972(5\d{8})/); if(m) return '0'+m[1];
+  m=d.match(/(05\d{8})/); if(m) return m[1];
+  m=d.match(/(?:^|[^\d])(5\d{8})(?!\d)/); if(m) return '0'+m[1];
+  return '';
+}
+function _guessName(text){
+  if(!text) return '';
+  const fn=text.match(/FN[^:]*:(.+)/i); if(fn) return fn[1].trim().slice(0,60);
+  const lines=text.split(/[\r\n]+/).map(s=>s.trim()).filter(Boolean);
+  for(const ln of lines){
+    if(/https?:|wa\.me|whatsapp|\.com/i.test(ln)) continue;
+    const clean=ln.replace(/[+\d().\-‪-‮]/g,'').replace(/\s{2,}/g,' ').trim();
+    if(clean.length>=2 && /[א-תA-Za-z]/.test(clean)) return clean.slice(0,60);
+  }
+  return '';
+}
+function parseLeadText(text){ return {name:_guessName(text), phone:_extractPhone(text)}; }
+
+function fillQuickFrom(text){
+  const {name,phone}=parseLeadText(text);
+  openQuickAdd();
+  document.getElementById('q-name').value=name||'';
+  document.getElementById('q-phone').value=phone||'';
+  toast(phone||name ? '📲 מולא מוואטסאפ — בדקו ואשרו' : 'לא זוהו פרטים — מלאו ידנית');
+}
+
+async function pasteFromWhatsapp(){
+  let text='';
+  try{ if(navigator.clipboard&&navigator.clipboard.readText){ text=await navigator.clipboard.readText(); } }catch(e){}
+  if(!text || !text.trim()){ text=prompt('הדביקו כאן את ההודעה או איש הקשר מוואטסאפ:')||''; }
+  if(!text.trim()) return;
+  const {name,phone}=parseLeadText(text);
+  if(name) document.getElementById('q-name').value=name;
+  if(phone) document.getElementById('q-phone').value=phone;
+  toast(phone ? ('📲 זוהה: '+((name?name+' · ':''))+phone) : 'לא זוהה מספר — נסו להדביק שוב');
+}
+
+// Share Target: capture shared text (?text/?title/?url) on load, consume after login
+(function(){
+  try{
+    const sp=new URLSearchParams(location.search);
+    const shared=[sp.get('text'),sp.get('title'),sp.get('url')].filter(Boolean).join('\n').trim();
+    if(shared){ sessionStorage.setItem('sharedLead',shared); history.replaceState(null,'','/'); }
+    else if(location.pathname==='/share'){ history.replaceState(null,'','/'); }
+  }catch(e){}
+})();
+function maybeConsumeShare(){
+  let s=''; try{ s=sessionStorage.getItem('sharedLead')||''; }catch(e){}
+  if(!s) return;
+  try{ sessionStorage.removeItem('sharedLead'); }catch(e){}
+  setTimeout(()=>fillQuickFrom(s), 600);
 }
 async function submitQuick(e) {
   e.preventDefault();

@@ -2106,11 +2106,29 @@ def serve_sw():
 
 @fastapi_app.get("/manifest.json")
 def serve_manifest():
-    from fastapi.responses import FileResponse
-    p = os.path.join(STATIC_DIR, "manifest.json")
-    if os.path.exists(p):
-        return FileResponse(p, media_type="application/manifest+json")
-    raise HTTPException(404)
+    from fastapi.responses import JSONResponse
+    return JSONResponse({
+        "name": "Bar Lead Manager",
+        "short_name": "Bar Leads",
+        "start_url": "/",
+        "scope": "/",
+        "display": "standalone",
+        "background_color": "#0f1117",
+        "theme_color": "#0f1117",
+        "dir": "rtl",
+        "lang": "he",
+        "icons": [
+            {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
+            {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"},
+        ],
+        # Lets users SHARE a WhatsApp message/contact straight into the app → new lead
+        "share_target": {
+            "action": "/share",
+            "method": "GET",
+            "enctype": "application/x-www-form-urlencoded",
+            "params": {"title": "title", "text": "text", "url": "url"},
+        },
+    }, media_type="application/manifest+json")
 
 @fastapi_app.get("/icon-192.png")
 def serve_icon_192():
