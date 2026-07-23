@@ -234,7 +234,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
 /* ── QUICK-ADD MODAL ── */
 #quick-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:300;align-items:flex-end;justify-content:center}
 #quick-modal.open{display:flex}
-.quick-sheet{background:var(--card);border:1px solid var(--border);border-radius:22px 22px 0 0;padding:20px 20px calc(20px + var(--safe-bottom));width:100%;max-width:480px;max-height:88vh;overflow-y:auto}
+.quick-sheet{position:relative;background:var(--card);border:1px solid var(--border);border-radius:22px 22px 0 0;padding:20px 20px calc(20px + var(--safe-bottom));width:100%;max-width:480px;max-height:88vh;overflow-y:auto}
 /* ── ONBOARDING ── */
 .onboarding-card{background:linear-gradient(135deg,rgba(79,172,255,.12),rgba(138,43,226,.08));border:1px solid rgba(79,172,255,.25);border-radius:20px;padding:28px 20px;margin:16px 12px;text-align:center}
 .onboarding-card .ob-icon{font-size:52px;margin-bottom:12px}
@@ -581,6 +581,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
 <div id="quick-modal" onclick="if(event.target===this)closeQuickAdd()">
   <div class="quick-sheet">
     <div class="modal-handle"></div>
+    <button type="button" onclick="closeQuickAdd()" aria-label="סגור" style="position:absolute;top:14px;left:14px;width:36px;height:36px;border-radius:50%;border:none;background:rgba(255,255,255,.08);color:var(--text);font-size:20px;line-height:1;cursor:pointer;font-family:inherit;z-index:2">✕</button>
     <div class="quick-title">➕ הוסף ליד חדש</div>
     <button type="button" onclick="pasteFromWhatsapp()" style="width:100%;margin-bottom:14px;background:linear-gradient(135deg,#25d366,#1da851);border:none;color:#fff;font-family:inherit;font-weight:800;font-size:15px;padding:13px;border-radius:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px">📲 הדבק מוואטסאפ — מילוי אוטומטי</button>
     <form id="quick-form" onsubmit="submitQuick(event)">
@@ -655,8 +656,9 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
 
 <!-- COMPOSE MESSAGE MODAL -->
 <div class="modal-overlay" id="msg-modal" onclick="if(event.target===this)closeMsgModal()">
-  <div class="modal-sheet">
+  <div class="modal-sheet" style="position:relative">
     <div class="modal-handle"></div>
+    <button type="button" onclick="closeMsgModal()" aria-label="סגור" style="position:absolute;top:14px;left:14px;width:36px;height:36px;border-radius:50%;border:none;background:rgba(255,255,255,.08);color:var(--text);font-size:20px;line-height:1;cursor:pointer;font-family:inherit;z-index:2">✕</button>
     <div class="section-title" style="margin-top:0">✍️ הודעה מהירה <span id="msg-to" style="color:var(--text2);font-weight:500;font-size:13px"></span></div>
     <div style="font-size:12px;color:var(--text2);margin-bottom:8px">בחר סוג הודעה — ננסח לך, ותפתח בוואטסאפ בקליק:</div>
     <div id="msg-intents" class="msg-chips"></div>
