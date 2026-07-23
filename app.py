@@ -181,7 +181,7 @@ def ensure_db():
         # Add new columns to existing databases
         for col, default in [
             ("tags", "''"), ("created_by", "''"), ("source", "''"),
-            ("package", "''"), ("user_id", "''"),
+            ("package", "''"), ("user_id", "''"), ("event_date", "''"),
         ]:
             cur.execute(f"ALTER TABLE leads ADD COLUMN IF NOT EXISTS {col} TEXT DEFAULT {default}")
         # Users table
@@ -769,7 +769,8 @@ def db_add_lead(name: str, phone: str, call_dt, user_id: str = "") -> str:
 
 def db_add_lead_full(name: str, phone: str, call_time: Optional[str],
                      notes: str, tags: str, created_by: str = "",
-                     source: str = "", package: str = "", user_id: str = "") -> str:
+                     source: str = "", package: str = "", user_id: str = "",
+                     event_date: str = "") -> str:
     lid = str(uuid.uuid4())[:8].upper()
     now = _now()
     if not user_id:
@@ -779,10 +780,10 @@ def db_add_lead_full(name: str, phone: str, call_time: Optional[str],
         cur.execute(
             "INSERT INTO leads "
             "(id, name, phone, call_time, status, notes, tags, created_by, "
-            "source, package, user_id, created_at, updated_at) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            "source, package, user_id, event_date, created_at, updated_at) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
             (lid, name, phone, call_time, ST_NEW, notes or "", tags or "", created_by,
-             source or "", package or "", user_id, now, now)
+             source or "", package or "", user_id, event_date or "", now, now)
         )
     return lid
 
@@ -800,6 +801,34 @@ def db_delete_lead(lid: str):
     with _db() as conn:
         cur = conn.cursor()
         cur.execute("DELETE FROM leads WHERE id=%s", (lid,))
+
+def db_event_conflict(user_id: str, event_date: str, exclude_id: Optional[str] = None) -> str:
+    """Return the name of a CLOSED-WON lead already booked on event_date (same user), else ''."""
+    if not event_date:
+        return ""
+    with _db() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        q = ("SELECT name FROM leads WHERE user_id=%s AND event_date=%s AND status=%s")
+        params = [user_id, event_date, ST_WON]
+        if exclude_id:
+            q += " AND id<>%s"
+            params.append(exclude_id)
+        q += " LIMIT 1"
+        cur.execute(q, params)
+        row = cur.fetchone()
+        return row["name"] if row else ""
+
+def db_booked_dates(user_id: str) -> list:
+    """Return leads that have an event_date set (for the availability calendar)."""
+    with _db() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(
+            "SELECT id, name, event_date, status FROM leads "
+            "WHERE user_id=%s AND event_date IS NOT NULL AND event_date<>'' "
+            "ORDER BY event_date",
+            (user_id,)
+        )
+        return [dict(r) for r in cur.fetchall()]
 
 def db_get_leads_pre_reminder() -> list:
     """Return leads that need a reminder now.
@@ -1862,6 +1891,7 @@ class LeadCreate(BaseModel):
     tags:      Optional[str]  = ""
     source:    Optional[str]  = ""
     package:   Optional[str]  = ""
+    event_date: Optional[str] = ""      # YYYY-MM-DD of the event itself
     force:     Optional[bool] = False  # skip duplicate-phone check
 
     @field_validator("name", "phone", mode="before")
@@ -1882,6 +1912,7 @@ class LeadUpdate(BaseModel):
     tags:           Optional[str]   = None
     source:         Optional[str]   = None
     package:        Optional[str]   = None
+    event_date:     Optional[str]   = None
 
 class RegisterRequest(BaseModel):
     username:     str = Field(..., min_length=3, max_length=50)
@@ -2351,8 +2382,10 @@ def create_lead(body: LeadCreate, user: dict = Depends(get_current_user)):
         body.name, body.phone, body.call_time,
         body.notes or "", body.tags or "", created_by,
         source=body.source or "", package=body.package or "",
-        user_id=user["id"]
+        user_id=user["id"], event_date=body.event_date or ""
     )
+    # Double-booking: warn if the event date is already taken by a closed deal
+    conflict = db_event_conflict(user["id"], body.event_date or "", exclude_id=lid)
     msg = "<b>ליד חדש!</b>\n" + body.name + "\n" + body.phone + "\nנוסף ע׳׳י " + created_by
     if body.call_time:
         msg += "\n" + body.call_time
@@ -2364,7 +2397,10 @@ def create_lead(body: LeadCreate, user: dict = Depends(get_current_user)):
     _own_chat = db_get_user_chat_id(user["id"])
     if _own_chat:
         _send_tg(msg, chat_id=_own_chat)
-    return {"id": lid, "message": "Lead created"}
+    resp = {"id": lid, "message": "Lead created"}
+    if conflict:
+        resp["warning"] = f"⚠️ שים לב: התאריך {body.event_date} כבר תפוס באירוע סגור של {conflict}"
+    return resp
 
 # ── AI / template message drafting ──────────────────────────────────────────
 AI_API_KEY = os.getenv("AI_API_KEY", "").strip()
@@ -2563,7 +2599,24 @@ def update_lead_api(lid: str, body: LeadUpdate, user: dict = Depends(get_current
     if new_status in (ST_WON, ST_LOST, ST_OLD) and "follow_up_time" not in updates:
         updates["follow_up_time"] = None
     db_update_lead(lid, **updates)
-    return {"message": "Updated"}
+    resp = {"message": "Updated"}
+    # Double-booking warning if this becomes a closed event, or its date changed
+    ed = updates.get("event_date", existing.get("event_date", ""))
+    st = updates.get("status", existing.get("status", ""))
+    if ed and (st == ST_WON or "event_date" in updates):
+        conflict = db_event_conflict(user["id"], ed, exclude_id=lid)
+        if conflict:
+            resp["warning"] = f"⚠️ התאריך {ed} כבר תפוס באירוע סגור של {conflict}"
+    return resp
+
+@fastapi_app.get("/api/availability")
+def get_availability(user: dict = Depends(get_current_user)):
+    rows = db_booked_dates(user["id"])
+    for r in rows:
+        r["status_heb"]   = STATUS_HEB.get(r.get("status", ""), r.get("status", ""))
+        r["status_emoji"] = STATUS_EMOJI.get(r.get("status", ""), "")
+        r["booked"]       = (r.get("status") == ST_WON)
+    return {"dates": rows}
 
 @fastapi_app.delete("/api/leads/{lid}")
 def delete_lead_api(lid: str, user: dict = Depends(get_current_user)):

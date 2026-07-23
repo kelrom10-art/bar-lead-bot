@@ -637,6 +637,11 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
         <input id="q-time" class="form-input" type="datetime-local">
       </div>
       <div class="form-group">
+        <label class="form-label">📆 תאריך האירוע <span style="color:var(--text2);font-weight:400">(למניעת כפל הזמנות)</span></label>
+        <input id="q-event" class="form-input" type="date" onchange="checkEventDate(this.value,'q-event-warn')">
+        <div id="q-event-warn" style="display:none;margin-top:6px;font-size:12.5px;color:var(--yellow);font-weight:600"></div>
+      </div>
+      <div class="form-group">
         <label class="form-label">📝 הערות</label>
         <textarea id="q-notes" class="form-input" rows="2" style="resize:none" placeholder="פרטים נוספים..."></textarea>
       </div>
@@ -706,6 +711,11 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
       <div class="form-group">
         <label class="form-label">📅 שעת שיחה</label>
         <input id="edit-time" class="form-input" type="datetime-local">
+      </div>
+      <div class="form-group">
+        <label class="form-label">📆 תאריך האירוע</label>
+        <input id="edit-event" class="form-input" type="date" onchange="checkEventDate(this.value,'edit-event-warn')">
+        <div id="edit-event-warn" style="display:none;margin-top:6px;font-size:12.5px;color:var(--yellow);font-weight:600"></div>
       </div>
       <div class="form-group">
         <label class="form-label">📣 מקור</label>
@@ -1697,6 +1707,7 @@ async function openLead(id) {
           </div>
         </div>
         ${l.call_time?`<div style="color:var(--text2);font-size:13px;margin-top:6px">📅 שיחה: ${fmtDT(l.call_time)}</div>`:''}
+        ${l.event_date?`<div style="color:var(--text2);font-size:13px;margin-top:4px">📆 תאריך האירוע: ${esc(l.event_date)}</div>`:''}
         ${fuHtml}
         ${tagsHtml?`<div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:4px">${tagsHtml}</div>`:''}
         ${l.notes?`<div style="margin-top:8px;font-size:13px;color:var(--text3)">📝 ${esc(l.notes)}</div>`:''}
@@ -1816,6 +1827,8 @@ async function openEdit(id) {
   document.getElementById('edit-name').value   =l.name||'';
   document.getElementById('edit-phone').value  =l.phone||'';
   document.getElementById('edit-time').value   =toLocalDatetime(l.call_time);
+  document.getElementById('edit-event').value  =l.event_date||'';
+  document.getElementById('edit-event-warn').style.display='none';
   document.getElementById('edit-notes').value  =l.notes||'';
   document.getElementById('edit-source').value =l.source||'';
   document.getElementById('edit-package').value=l.package||'';
@@ -1837,6 +1850,7 @@ async function submitEdit(e) {
   const body={
     name, phone,
     call_time:fromLocalDatetime(document.getElementById('edit-time').value),
+    event_date: document.getElementById('edit-event').value || '',
     notes:    document.getElementById('edit-notes').value.trim(),
     tags:     [...selectedEditTags].join(','),
     source:   document.getElementById('edit-source').value,
@@ -1847,7 +1861,7 @@ async function submitEdit(e) {
   try {
     const res=await apiFetch('/api/leads/'+currentLeadId,{method:'PUT',body:JSON.stringify(body)});
     document.getElementById('edit-modal').classList.remove('open');
-    if (res.ok) { toast('✅ ליד עודכן!'); }
+    if (res.ok) { const d=await res.json().catch(()=>({})); toast(d.warning || '✅ ליד עודכן!'); _availCache=null; }
     else { const err=await res.json().catch(()=>({})); toast('❌ '+(err.detail||'שגיאה')); }
     loadToday(); loadLeads();
   } finally {
@@ -2053,7 +2067,28 @@ async function loadCalendar() {
     }
     agenda+='</div>';
     const summary=`<div style="text-align:center;color:var(--text2);font-size:13px;margin-bottom:12px">${totalEvents? '📅 '+totalEvents+' שיחות השבוע' : 'אין שיחות מתוכננות השבוע'}</div>`;
-    document.getElementById('calendar-content').innerHTML=strip+summary+agenda;
+    // Upcoming booked events (availability / double-booking overview)
+    let booked='';
+    try {
+      const avail=await loadAvailability();
+      const upcoming=avail.filter(a=>String(a.event_date)>=todayKey).sort((a,b)=>String(a.event_date).localeCompare(String(b.event_date))).slice(0,10);
+      if (upcoming.length){
+        booked='<div style="background:rgba(255,255,255,.04);border:1px solid var(--border);border-radius:12px;padding:10px 12px;margin-bottom:14px">'
+          +'<div style="font-weight:700;font-size:13px;margin-bottom:8px">📆 אירועים מתוכננים</div>';
+        for (const a of upcoming){
+          const col=a.booked?'var(--green)':'var(--yellow)';
+          const badge=a.booked?'✅ סגור':(a.status_heb||'ליד');
+          booked+=`<div onclick="openLead('${a.id}')" style="display:flex;align-items:center;gap:8px;padding:5px 0;cursor:pointer;font-size:13px">
+            <span style="width:9px;height:9px;border-radius:50%;background:${col};flex:0 0 9px"></span>
+            <span style="color:var(--text2);min-width:82px;direction:ltr;text-align:right">${esc(a.event_date)}</span>
+            <span style="flex:1">${esc(a.name)}</span>
+            <span style="font-size:11px;color:${col};font-weight:600">${badge}</span>
+          </div>`;
+        }
+        booked+='</div>';
+      }
+    } catch(e){}
+    document.getElementById('calendar-content').innerHTML=booked+strip+summary+agenda;
   } catch(e){
     document.getElementById('calendar-content').innerHTML='<div class="empty"><div class="empty-icon">⚠️</div><div>שגיאה</div></div>';
   }
@@ -2142,6 +2177,7 @@ function openQuickAdd() {
       _qSelectedTags.has(b.dataset.tag) ? _qSelectedTags.delete(b.dataset.tag) : _qSelectedTags.add(b.dataset.tag);
     };
   });
+  const _ew=document.getElementById('q-event-warn'); if(_ew) _ew.style.display='none';
   document.getElementById('quick-modal').classList.add('open');
   setTimeout(() => document.getElementById('q-name')?.focus(), 120);
 }
@@ -2310,6 +2346,38 @@ async function copyMsg(){
   try{ await navigator.clipboard.writeText(txt); toast('📋 הועתק'); }
   catch(e){ toast('בחר והעתק ידנית'); }
 }
+// ── Availability / double-booking ────────────────────────────────────────
+let _availCache = null;
+async function loadAvailability(force){
+  if (_availCache && !force) return _availCache;
+  try {
+    const d = await apiFetch('/api/availability').then(r=>r.json());
+    _availCache = d.dates || [];
+  } catch(e){ _availCache = []; }
+  return _availCache;
+}
+async function checkEventDate(dateStr, warnElId){
+  const el = document.getElementById(warnElId);
+  if (!el) return;
+  if (!dateStr){ el.style.display='none'; return; }
+  const dates = await loadAvailability();
+  const taken = dates.filter(x=>x.event_date===dateStr);
+  const won   = taken.find(x=>x.booked);
+  if (won){
+    el.textContent = '⚠️ התאריך תפוס — אירוע סגור: ' + won.name;
+    el.style.color = 'var(--red)';
+    el.style.display = 'block';
+  } else if (taken.length){
+    el.textContent = 'ℹ️ יש ליד נוסף בתאריך זה: ' + taken[0].name + ' (עדיין לא נסגר)';
+    el.style.color = 'var(--yellow)';
+    el.style.display = 'block';
+  } else {
+    el.textContent = '✓ התאריך פנוי';
+    el.style.color = 'var(--green)';
+    el.style.display = 'block';
+  }
+}
+
 async function submitQuick(e) {
   e.preventDefault();
   const name    = document.getElementById('q-name').value.trim();
@@ -2318,12 +2386,13 @@ async function submitQuick(e) {
   const source  = document.getElementById('q-source').value;
   const pkg     = document.getElementById('q-package').value;
   const notes   = document.getElementById('q-notes').value.trim();
+  const eventD  = document.getElementById('q-event').value || '';
   const tags    = [..._qSelectedTags].join(',');
   if (!name || !phone) { toast('מלא שם וטלפון'); return; }
   const btn = e.target.querySelector('button[type=submit]');
   if (btn) { btn.disabled = true; btn.textContent = '⏳ שומר...'; }
   try {
-    const body = { name, phone, call_time: fromLocalDatetime(time), source, package: pkg, notes, tags };
+    const body = { name, phone, call_time: fromLocalDatetime(time), source, package: pkg, notes, tags, event_date: eventD };
     let res = await apiFetch('/api/leads', {method:'POST', body:JSON.stringify(body)});
     if (res.status === 409) {
       const err = await res.json().catch(()=>({}));
@@ -2333,11 +2402,14 @@ async function submitQuick(e) {
       }
     }
     if (res.ok) {
+      const d = await res.json().catch(()=>({}));
       document.getElementById('quick-form').reset();
       _qSelectedTags = new Set();
       document.querySelectorAll('#q-tags-row .tag-btn').forEach(b=>b.classList.remove('selected'));
+      document.getElementById('q-event-warn').style.display='none';
       closeQuickAdd();
-      toast('🎯 ליד נוסף!');
+      toast(d.warning || '🎯 ליד נוסף!');
+      _availCache = null;
       if (document.getElementById('screen-leads').classList.contains('active')) loadLeads();
       loadToday();
     } else if (res.status !== 409) {
