@@ -401,6 +401,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
           </div>
           <div class="user-dropdown-item" onclick="openNotifModal()">🔔 התראות לטלפון</div>
           <div class="user-dropdown-item" onclick="openTelegramModal()">✈️ חיבור טלגרם</div>
+          <div class="user-dropdown-item" onclick="openFormLink()">🔗 טופס לידים (לינק לאינסטגרם)</div>
           <div class="user-dropdown-item" onclick="goToAdmin()">⚙️ ניהול מערכת</div>
           <div class="user-dropdown-item" style="color:var(--red)" onclick="doLogout()">🚪 התנתקות</div>
         </div>
@@ -694,6 +695,23 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
   </div>
 </div>
 
+<!-- FORM LINK MODAL -->
+<div class="modal-overlay" id="formlink-modal" onclick="if(event.target===this)this.classList.remove('open')">
+  <div class="modal-sheet" style="position:relative">
+    <div class="modal-handle"></div>
+    <button type="button" onclick="document.getElementById('formlink-modal').classList.remove('open')" aria-label="סגור" style="position:absolute;top:14px;left:14px;width:36px;height:36px;border-radius:50%;border:none;background:rgba(255,255,255,.08);color:var(--text);font-size:20px;line-height:1;cursor:pointer;font-family:inherit;z-index:2">✕</button>
+    <div class="section-title" style="margin-top:0">🔗 טופס לידים ציבורי</div>
+    <div style="font-size:13px;color:var(--text2);line-height:1.6;margin-bottom:12px">
+      שים את הלינק הזה ב<b>ביו של האינסטגרם</b>, בסטטוס וואטסאפ או באתר. כל מי שממלא — נכנס <b>אוטומטית כליד חדש</b> אצלך (מקור: אתר), ואתה מקבל התראה.
+    </div>
+    <input id="formlink-input" class="form-input" readonly style="direction:ltr;text-align:center;font-size:13px" value="טוען...">
+    <div style="display:flex;gap:6px;margin-top:8px">
+      <button class="btn btn-wa btn-sm" style="flex:1" onclick="copyFormLink()">📋 העתק לינק</button>
+      <a id="formlink-open" href="#" target="_blank" class="btn btn-gray btn-sm" style="flex:1;text-decoration:none">👁 תצוגה</a>
+    </div>
+  </div>
+</div>
+
 <!-- EDIT MODAL -->
 <div class="modal-overlay" id="edit-modal" onclick="closeEditModal(event)">
   <div class="modal-sheet">
@@ -890,6 +908,23 @@ const waLink = phone => {
   return `https://wa.me/${d}`;
 };
 
+// Hot-lead scoring: 🔥 hot / 🌡️ warm — only for open leads
+function leadHeat(l){
+  const open=['new','pre_reminded','called','follow_up'].includes(l.status);
+  if(!open) return '';
+  let s=0;
+  if(l.created_at){
+    const days=(Date.now()-new Date(l.created_at).getTime())/86400000;
+    if(days<=1) s+=2; else if(days<=3) s+=1;
+  }
+  if(['referral','instagram','website'].includes(l.source)) s+=1;
+  if(l.event_date) s+=1;
+  if(l.status==='follow_up'||l.status==='called') s+=1;
+  if(s>=4) return '🔥';
+  if(s>=2) return '🌡️';
+  return '';
+}
+
 const SRC_EMO  = {instagram:'📸',facebook:'👤',tiktok:'🎵',referral:'🤝',website:'🌐',phone:'📞',other:'•'};
 const SRC_LBL  = {instagram:'אינסטגרם',facebook:'פייסבוק',tiktok:'טיקטוק',referral:'המלצה',website:'אתר',phone:'טלפון',other:'אחר'};
 const PKG_LBL  = {basic:'בסיסי',standard:'סטנדרט',premium:'פרמיום ⭐',vip:'VIP 👑',custom:'מותאם'};
@@ -978,6 +1013,7 @@ if (window.matchMedia('(display-mode: standalone)').matches || window.navigator.
 document.addEventListener('keydown', e => {
   // Escape closes any open modal
   if (e.key === 'Escape') {
+    if (document.getElementById('formlink-modal')?.classList.contains('open')) { document.getElementById('formlink-modal').classList.remove('open'); return; }
     if (document.getElementById('msg-modal')?.classList.contains('open')) { closeMsgModal(); return; }
     if (document.getElementById('quick-modal')?.classList.contains('open')) { closeQuickAdd(); return; }
     const editM = document.getElementById('edit-modal');
@@ -1256,6 +1292,23 @@ function closeNotifModal() {
 }
 
 // ── Telegram linking ────────────────────────────────────────────────────────
+async function openFormLink() {
+  document.getElementById('user-dropdown')?.classList.remove('open');
+  const inp=document.getElementById('formlink-input');
+  inp.value='טוען...';
+  document.getElementById('formlink-modal').classList.add('open');
+  try{
+    const d=await apiFetch('/api/me/formlink').then(r=>r.json());
+    inp.value=d.url||'';
+    document.getElementById('formlink-open').href=d.url||'#';
+  }catch(e){ inp.value='שגיאה בטעינת הלינק'; }
+}
+async function copyFormLink(){
+  const v=document.getElementById('formlink-input').value;
+  try{ await navigator.clipboard.writeText(v); toast('📋 הלינק הועתק!'); }
+  catch(e){ const i=document.getElementById('formlink-input'); i.select(); toast('בחר והעתק ידנית'); }
+}
+
 async function openTelegramModal() {
   document.getElementById('user-dropdown')?.classList.remove('open');
   const modal = document.getElementById('tg-modal');
@@ -1569,7 +1622,7 @@ async function loadLeads() {
       return `<div class="lead-item" style="border-right-color:${ST_COLOR[l.status]||'transparent'}" onclick="openLead('${l.id}')" data-id="${l.id}">
         <div class="lead-avatar" style="background:${nameToColor(l.name)}">${nameInitials(l.name)}</div>
         <div class="lead-info">
-          <div class="lead-name">${esc(l.name)}</div>
+          <div class="lead-name">${leadHeat(l)?leadHeat(l)+' ':''}${esc(l.name)}</div>
           <div class="lead-phone">${esc(l.phone)}</div>
           ${meta?`<div class="lead-meta">${meta}</div>`:''}
         </div>
@@ -1937,17 +1990,19 @@ async function loadStats() {
       <div class="card"><div class="section-title" style="margin-top:0">📈 לידים ב-7 ימים</div><div class="chart-wrap-bar"><canvas id="dailyChart"></canvas></div></div>
       <div class="card"><div class="section-title" style="margin-top:0">🥧 פילוח סטאטוסים</div><div class="chart-wrap"><canvas id="statusChart"></canvas></div></div>
       <div class="card"><div class="section-title" style="margin-top:0">📣 לידים לפי מקור</div><div id="src-chart-wrap" class="chart-wrap"><canvas id="sourceChart"></canvas></div></div>
-      <div class="card" id="conv-card"><div class="section-title" style="margin-top:0">🎯 המרה לפי מקור</div><div id="conv-rows"></div></div>`;
+      <div class="card" id="conv-card"><div class="section-title" style="margin-top:0">💰 ROI לפי מקור</div><div style="font-size:12px;color:var(--text2);margin:-6px 0 12px">איזה ערוץ באמת מכניס כסף — המרה + הכנסה</div><div id="conv-rows"></div></div>`;
 
     // ── Conversion by source (which channel actually closes deals) ──
     const conv = st.source_conversion || {};
     const convKeys = Object.keys(conv).filter(k => (conv[k].total||0) >= 2);  // need a minimum sample
     const convCard = document.getElementById('conv-card');
     if (convKeys.length) {
-      convKeys.sort((a,b)=>(conv[b].won/conv[b].total)-(conv[a].won/conv[a].total));
+      // sort by revenue (ROI) desc, fallback conversion
+      convKeys.sort((a,b)=>((conv[b].revenue||0)-(conv[a].revenue||0)) || ((conv[b].won/conv[b].total)-(conv[a].won/conv[a].total)));
       let rowsHtml = '';
       for (const k of convKeys) {
         const t = conv[k].total, wn = conv[k].won, pct = Math.round(wn/t*100);
+        const rev = Math.round(conv[k].revenue||0);
         const barColor = pct>=50?'var(--green)':pct>=25?'var(--yellow,#ffc048)':'var(--red)';
         rowsHtml += `
           <div style="margin-bottom:12px">
@@ -1958,12 +2013,14 @@ async function loadStats() {
             <div style="height:7px;background:rgba(255,255,255,.06);border-radius:4px;overflow:hidden">
               <div style="height:100%;width:${pct}%;background:${barColor};border-radius:4px"></div>
             </div>
+            ${rev>0?`<div style="text-align:left;font-size:12px;color:var(--green);font-weight:700;margin-top:3px">₪${rev.toLocaleString()}</div>`:''}
           </div>`;
       }
-      const best = convKeys[0];
-      const bestPct = Math.round(conv[best].won/conv[best].total*100);
-      if (bestPct > 0) {
-        rowsHtml += `<div style="margin-top:6px;padding:10px 12px;background:rgba(0,212,160,.08);border-radius:10px;font-size:12px;color:var(--text2)">💡 המקור המניב ביותר: <strong style="color:var(--green)">${SRC_LBL[best]||best}</strong> (${bestPct}% המרה)</div>`;
+      // best by revenue
+      const byRev = convKeys.slice().sort((a,b)=>(conv[b].revenue||0)-(conv[a].revenue||0));
+      const bestRev = byRev[0];
+      if (bestRev && (conv[bestRev].revenue||0) > 0) {
+        rowsHtml += `<div style="margin-top:6px;padding:10px 12px;background:rgba(0,212,160,.08);border-radius:10px;font-size:12px;color:var(--text2)">💡 הערוץ שמכניס הכי הרבה כסף: <strong style="color:var(--green)">${SRC_LBL[bestRev]||bestRev}</strong> — ₪${Math.round(conv[bestRev].revenue).toLocaleString()}. שווה להשקיע בו יותר.</div>`;
       }
       document.getElementById('conv-rows').innerHTML = rowsHtml;
     } else {

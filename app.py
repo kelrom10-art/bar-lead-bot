@@ -198,6 +198,7 @@ def ensure_db():
         cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN DEFAULT FALSE")
         cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_chat_id TEXT DEFAULT ''")
         cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_link_code TEXT DEFAULT ''")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS public_slug TEXT DEFAULT ''")
         # Sessions table
         cur.execute("""
             CREATE TABLE IF NOT EXISTS sessions (
@@ -354,6 +355,27 @@ def db_get_user_by_chat_id(chat_id: str) -> Optional[dict]:
     with _db() as conn:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute("SELECT * FROM users WHERE telegram_chat_id=%s", (str(chat_id),))
+        row = cur.fetchone()
+    return dict(row) if row else None
+
+def db_get_or_create_public_slug(user_id: str) -> str:
+    """Stable per-user public slug for the contact form (e.g. Instagram bio link)."""
+    with _db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT public_slug FROM users WHERE id=%s", (user_id,))
+        row = cur.fetchone()
+        slug = row[0] if row and row[0] else ""
+        if not slug:
+            slug = secrets.token_urlsafe(6).replace("-", "").replace("_", "")[:8].lower()
+            cur.execute("UPDATE users SET public_slug=%s WHERE id=%s", (slug, user_id))
+    return slug
+
+def db_get_user_by_slug(slug: str) -> Optional[dict]:
+    if not slug:
+        return None
+    with _db() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT * FROM users WHERE public_slug=%s", (slug.strip().lower(),))
         row = cur.fetchone()
     return dict(row) if row else None
 
@@ -952,19 +974,21 @@ def db_source_conversion(user_id: Optional[str] = None) -> dict:
             cur.execute(
                 "SELECT COALESCE(NULLIF(source,''),'other') AS src, "
                 "COUNT(*) AS total, "
-                "COUNT(*) FILTER (WHERE status=%s) AS won "
+                "COUNT(*) FILTER (WHERE status=%s) AS won, "
+                "COALESCE(SUM(sale_amount) FILTER (WHERE status=%s),0) AS revenue "
                 "FROM leads WHERE user_id=%s GROUP BY src",
-                (ST_WON, user_id)
+                (ST_WON, ST_WON, user_id)
             )
         else:
             cur.execute(
                 "SELECT COALESCE(NULLIF(source,''),'other') AS src, "
                 "COUNT(*) AS total, "
-                "COUNT(*) FILTER (WHERE status=%s) AS won "
+                "COUNT(*) FILTER (WHERE status=%s) AS won, "
+                "COALESCE(SUM(sale_amount) FILTER (WHERE status=%s),0) AS revenue "
                 "FROM leads GROUP BY src",
-                (ST_WON,)
+                (ST_WON, ST_WON)
             )
-        return {row[0]: {"total": row[1], "won": row[2]} for row in cur.fetchall()}
+        return {row[0]: {"total": row[1], "won": row[2], "revenue": float(row[3])} for row in cur.fetchall()}
 
 def db_calendar_leads(user_id: str, from_dt: str, to_dt: str) -> list:
     """Get leads with call_time in [from_dt, to_dt] for calendar view."""
@@ -1934,6 +1958,16 @@ class ResetPasswordRequest(BaseModel):
 class PushSubscribeRequest(BaseModel):
     subscription: dict
 
+class PublicLeadRequest(BaseModel):
+    name:    str           = Field(..., min_length=1, max_length=200)
+    phone:   str           = Field(..., min_length=1, max_length=50)
+    details: Optional[str] = ""
+
+    @field_validator("name", "phone", mode="before")
+    @classmethod
+    def _strip(cls, v):
+        return v.strip() if isinstance(v, str) else v
+
 class AIDraftRequest(BaseModel):
     intent:  str            = Field("followup", max_length=40)
     tone:    Optional[str]  = "friendly"
@@ -2623,6 +2657,101 @@ def delete_lead_api(lid: str, user: dict = Depends(get_current_user)):
     _get_owned_lead(lid, user)  # enforce ownership before deleting
     db_delete_lead(lid)
     return {"message": "Deleted"}
+
+# ── Public contact form (Instagram bio / website link → lead) ────────────────
+def _html_escape(s: str) -> str:
+    return (str(s or "").replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;").replace('"', "&quot;"))
+
+_PUBLIC_FORM_HTML = r"""<!doctype html>
+<html lang="he" dir="rtl"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>__BIZ__ — השאירו פרטים</title>
+<style>
+:root{--bg:#0f1117;--card:#1a1d27;--line:#2a2f3e;--txt:#e6e8ee;--txt2:#9aa3b5;--accent:#8b7bf0;--green:#25d366}
+*{box-sizing:border-box;margin:0;padding:0;font-family:system-ui,'Segoe UI',Arial,sans-serif}
+body{background:var(--bg);color:var(--txt);min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:26px 22px;width:100%;max-width:420px}
+h1{font-size:22px;text-align:center;margin-bottom:6px}
+.sub{color:var(--txt2);font-size:14px;text-align:center;margin-bottom:20px}
+label{display:block;font-size:13px;color:var(--txt2);margin:14px 0 6px}
+input,textarea{width:100%;background:#12151d;border:1px solid var(--line);border-radius:12px;padding:13px;color:var(--txt);font-size:16px}
+button{width:100%;margin-top:20px;background:linear-gradient(135deg,var(--accent),#4facff);border:none;color:#fff;font-weight:800;font-size:16px;padding:15px;border-radius:12px;cursor:pointer}
+.ok{text-align:center;padding:20px 0}.ok .big{font-size:46px}.hide{display:none}
+.foot{text-align:center;color:var(--txt2);font-size:11px;margin-top:16px}
+</style></head><body>
+<div class="card">
+  <div id="form-wrap">
+    <h1>👋 נעים להכיר!</h1>
+    <div class="sub">השאירו פרטים ו-__BIZ__ יחזרו אליכם בהקדם</div>
+    <label>שם מלא</label><input id="n" autocomplete="name" placeholder="השם שלך">
+    <label>טלפון</label><input id="p" type="tel" inputmode="tel" autocomplete="tel" placeholder="05X-XXXXXXX">
+    <label>פרטי האירוע (לא חובה)</label><textarea id="d" rows="3" placeholder="סוג אירוע, תאריך, כמות אנשים..."></textarea>
+    <button onclick="send()" id="btn">שליחה 🚀</button>
+  </div>
+  <div id="done" class="ok hide"><div class="big">✅</div><h1>תודה!</h1><div class="sub">הפרטים נשלחו, נחזור אליך בקרוב 🙌</div></div>
+  <div class="foot">מופעל ע״י Bar Lead Bot</div>
+</div>
+<script>
+async function send(){
+  const n=document.getElementById('n').value.trim();
+  const p=document.getElementById('p').value.trim();
+  const d=document.getElementById('d').value.trim();
+  if(!n||!p){alert('נא למלא שם וטלפון');return;}
+  const b=document.getElementById('btn');b.disabled=true;b.textContent='שולח...';
+  try{
+    const r=await fetch('/api/public/lead/__SLUG__',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n,phone:p,details:d})});
+    if(r.ok){document.getElementById('form-wrap').classList.add('hide');document.getElementById('done').classList.remove('hide');}
+    else{const e=await r.json().catch(()=>({}));alert(e.detail||'שגיאה, נסו שוב');b.disabled=false;b.textContent='שליחה 🚀';}
+  }catch(e){alert('שגיאת חיבור');b.disabled=false;b.textContent='שליחה 🚀';}
+}
+</script></body></html>"""
+
+@fastapi_app.get("/api/me/formlink")
+def get_formlink(request: Request, user: dict = Depends(get_current_user)):
+    slug = db_get_or_create_public_slug(user["id"])
+    base = os.getenv("APP_URL", "").rstrip("/") or str(request.base_url).rstrip("/")
+    return {"slug": slug, "url": f"{base}/f/{slug}"}
+
+_PUBLIC_FORM_RL: dict = {}
+def _public_rl_ok(key: str, limit: int = 6, window: int = 60) -> bool:
+    now = time.time()
+    hits = [t for t in _PUBLIC_FORM_RL.get(key, []) if now - t < window]
+    if len(hits) >= limit:
+        _PUBLIC_FORM_RL[key] = hits
+        return False
+    hits.append(now)
+    _PUBLIC_FORM_RL[key] = hits
+    return True
+
+@fastapi_app.post("/api/public/lead/{slug}")
+def public_create_lead(slug: str, body: PublicLeadRequest, request: Request):
+    owner = db_get_user_by_slug(slug)
+    if not owner:
+        raise HTTPException(status_code=404, detail="הטופס לא נמצא")
+    ip = request.client.host if request.client else "?"
+    if not _public_rl_ok(f"{slug}:{ip}"):
+        raise HTTPException(status_code=429, detail="יותר מדי בקשות — נסו שוב בעוד רגע")
+    notes = ("נשלח מטופס צור-קשר. " + (body.details or "")).strip()
+    lid = db_add_lead_full(
+        body.name, body.phone, None, notes, "", "טופס ציבורי",
+        source="website", package="", user_id=owner["id"]
+    )
+    # Notify the owner (Telegram, if linked)
+    chat = db_get_user_chat_id(owner["id"])
+    if chat:
+        _send_tg(f"<b>ליד חדש מהטופס!</b>\n{body.name}\n{body.phone}\n{body.details or ''}", chat_id=chat)
+    return {"ok": True, "id": lid}
+
+@fastapi_app.get("/f/{slug}", response_class=HTMLResponse)
+def public_form_page(slug: str):
+    owner = db_get_user_by_slug(slug)
+    biz = ""
+    if owner:
+        biz = owner.get("display_name") or owner.get("username") or ""
+    if not owner:
+        return HTMLResponse("<h3 style='font-family:sans-serif;text-align:center;padding:40px'>הטופס לא נמצא</h3>", status_code=404)
+    return HTMLResponse(_PUBLIC_FORM_HTML.replace("__SLUG__", slug).replace("__BIZ__", _html_escape(biz)))
 
 # ── Stats ─────────────────────────────────────────────────────────────────────
 
