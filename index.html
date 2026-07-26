@@ -333,10 +333,13 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
           <span class="input-icon">🔒</span>
           <input id="reg-password" type="password" class="login-input" placeholder="סיסמה (לפחות 8 תווים)" required minlength="8">
         </div>
+        <label style="display:flex;align-items:flex-start;gap:8px;font-size:12px;color:var(--text2);margin:4px 2px 12px;text-align:right;cursor:pointer">
+          <input type="checkbox" id="reg-consent" style="margin-top:2px;flex:0 0 auto" required>
+          <span>קראתי ואני מאשר/ת את <a href="/terms" target="_blank" class="login-link">תנאי השימוש</a> ו<a href="/privacy" target="_blank" class="login-link">מדיניות הפרטיות</a>, ומסכים/ה לעיבוד המידע כמפורט בהם.</span>
+        </label>
         <button type="submit" class="login-btn" id="reg-btn">הירשם 🎉</button>
       </form>
       <div id="reg-error" class="login-error"></div>
-      <div class="login-footer" style="font-size:11px;color:var(--text2)">בהרשמה אתה מאשר את <a href="/terms" target="_blank" class="login-link">תנאי השימוש</a> ו<a href="/privacy" target="_blank" class="login-link">מדיניות הפרטיות</a></div>
       <div class="login-footer">כבר יש לך חשבון? <a onclick="showAuthScreen('login')" class="login-link">התחבר</a></div>
     </div>
   </div>
@@ -402,7 +405,9 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
           <div class="user-dropdown-item" onclick="openNotifModal()">🔔 התראות לטלפון</div>
           <div class="user-dropdown-item" onclick="openTelegramModal()">✈️ חיבור טלגרם</div>
           <div class="user-dropdown-item" onclick="openFormLink()">🔗 טופס לידים (לינק לאינסטגרם)</div>
+          <div class="user-dropdown-item" onclick="exportMyData()">📥 ייצוא המידע שלי</div>
           <div class="user-dropdown-item" onclick="goToAdmin()">⚙️ ניהול מערכת</div>
+          <div class="user-dropdown-item" onclick="deleteMyAccount()">🗑️ מחיקת חשבון ומידע</div>
           <div class="user-dropdown-item" style="color:var(--red)" onclick="doLogout()">🚪 התנתקות</div>
         </div>
       </div>
@@ -1073,6 +1078,10 @@ async function submitRegister(e) {
     document.getElementById('reg-error').textContent='סיסמה חייבת להכיל לפחות 8 תווים';
     btn.disabled=false; btn.textContent='הירשם 🎉'; return;
   }
+  if (!document.getElementById('reg-consent').checked) {
+    document.getElementById('reg-error').textContent='יש לאשר את תנאי השימוש ומדיניות הפרטיות';
+    btn.disabled=false; btn.textContent='הירשם 🎉'; return;
+  }
   try {
     const res  = await fetch('/api/auth/register',{
       method:'POST', headers:{'Content-Type':'application/json'},
@@ -1307,6 +1316,37 @@ async function copyFormLink(){
   const v=document.getElementById('formlink-input').value;
   try{ await navigator.clipboard.writeText(v); toast('📋 הלינק הועתק!'); }
   catch(e){ const i=document.getElementById('formlink-input'); i.select(); toast('בחר והעתק ידנית'); }
+}
+
+async function exportMyData() {
+  document.getElementById('user-dropdown')?.classList.remove('open');
+  toast('📥 מכין קובץ...');
+  try {
+    const token = localStorage.getItem('auth_token');
+    const res = await fetch('/api/export/excel', {headers:{Authorization:'Bearer '+token}});
+    if (!res.ok) { toast('❌ שגיאה בייצוא'); return; }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'my-data.xlsx'; document.body.appendChild(a); a.click();
+    a.remove(); URL.revokeObjectURL(url);
+    toast('✅ המידע יוצא');
+  } catch(e){ toast('❌ שגיאת חיבור'); }
+}
+async function deleteMyAccount() {
+  document.getElementById('user-dropdown')?.classList.remove('open');
+  if (!confirm('⚠️ פעולה זו תמחק לצמיתות את החשבון וכל הלידים שלך, ללא אפשרות שחזור.\n\nמומלץ לייצא את המידע לפני כן. להמשיך?')) return;
+  const typed = prompt('לאישור סופי, הקלד/י: מחק');
+  if ((typed||'').trim() !== 'מחק') { toast('בוטל'); return; }
+  try {
+    const token = localStorage.getItem('auth_token');
+    const res = await fetch('/api/me', {method:'DELETE', headers:{Authorization:'Bearer '+token}});
+    if (res.ok) {
+      localStorage.removeItem('auth_token'); localStorage.removeItem('user_info');
+      alert('החשבון והמידע נמחקו. תודה שהשתמשת ב-Bar Lead Bot.');
+      location.href = '/';
+    } else { toast('❌ שגיאה במחיקה'); }
+  } catch(e){ toast('❌ שגיאת חיבור'); }
 }
 
 async function openTelegramModal() {
