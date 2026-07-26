@@ -404,6 +404,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
           </div>
           <div class="user-dropdown-item" onclick="openNotifModal()">🔔 התראות לטלפון</div>
           <div class="user-dropdown-item" onclick="openTelegramModal()">✈️ חיבור טלגרם</div>
+          <div class="user-dropdown-item" onclick="openPricing()">⭐ מסלולים ושדרוג</div>
           <div class="user-dropdown-item" onclick="openFormLink()">🔗 טופס לידים (לינק לאינסטגרם)</div>
           <div class="user-dropdown-item" onclick="exportMyData()">📥 ייצוא המידע שלי</div>
           <div class="user-dropdown-item" onclick="goToAdmin()">⚙️ ניהול מערכת</div>
@@ -717,6 +718,30 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
   </div>
 </div>
 
+<!-- PRICING MODAL -->
+<div class="modal-overlay" id="pricing-modal" onclick="if(event.target===this)this.classList.remove('open')">
+  <div class="modal-sheet" style="position:relative">
+    <div class="modal-handle"></div>
+    <button type="button" onclick="document.getElementById('pricing-modal').classList.remove('open')" aria-label="סגור" style="position:absolute;top:14px;left:14px;width:36px;height:36px;border-radius:50%;border:none;background:rgba(255,255,255,.08);color:var(--text);font-size:20px;line-height:1;cursor:pointer;font-family:inherit;z-index:2">✕</button>
+    <div class="section-title" style="margin-top:0">⭐ מסלולים</div>
+    <div style="font-size:13px;color:var(--text2);margin-bottom:12px">14 יום ניסיון חינם. מבטלים מתי שרוצים.</div>
+    <div style="background:rgba(255,255,255,.04);border:1px solid var(--border);border-radius:14px;padding:14px;margin-bottom:10px">
+      <div style="font-weight:800;font-size:16px">בסיסי · <span style="color:var(--green)">₪49</span><span style="color:var(--text2);font-size:13px">/חודש</span></div>
+      <div style="font-size:13px;color:var(--text2);margin-top:4px">לידים ללא הגבלה · וואטסאפ/אינסטגרם · תבניות · יומן זמינות</div>
+    </div>
+    <div style="background:rgba(139,123,240,.10);border:1px solid var(--accent);border-radius:14px;padding:14px;margin-bottom:10px">
+      <div style="font-weight:800;font-size:16px">מקצועי ⭐ · <span style="color:var(--green)">₪99</span><span style="color:var(--text2);font-size:13px">/חודש</span> <span style="font-size:11px;background:var(--accent);color:#fff;border-radius:10px;padding:2px 8px;margin-right:4px">הכי פופולרי</span></div>
+      <div style="font-size:13px;color:var(--text2);margin-top:4px">כל הבסיסי + ניסוח AI · טופס לידים ציבורי · דוח ROI · טלגרם · גיבוי</div>
+    </div>
+    <div style="background:rgba(255,255,255,.04);border:1px solid var(--border);border-radius:14px;padding:14px;margin-bottom:14px">
+      <div style="font-weight:800;font-size:16px">עסקי · <span style="color:var(--green)">₪199</span><span style="color:var(--text2);font-size:13px">/חודש</span></div>
+      <div style="font-size:13px;color:var(--text2);margin-top:4px">כל המקצועי + שיתוף צוות · ריבוי משתמשים · מיתוג אישי</div>
+    </div>
+    <a class="btn btn-wa btn-full" href="https://wa.me/972585040309?text=%D7%94%D7%99%D7%99%2C%20%D7%90%D7%A9%D7%9E%D7%97%20%D7%9C%D7%A9%D7%93%D7%A8%D7%92%20%D7%90%D7%AA%20Bar%20Lead%20Bot" target="_blank" style="text-decoration:none">💬 לשדרוג — דברו איתנו</a>
+    <div style="font-size:11px;color:var(--text2);text-align:center;margin-top:8px">בקרוב: שדרוג ותשלום ישירות מהאפליקציה</div>
+  </div>
+</div>
+
 <!-- EDIT MODAL -->
 <div class="modal-overlay" id="edit-modal" onclick="closeEditModal(event)">
   <div class="modal-sheet">
@@ -1018,6 +1043,7 @@ if (window.matchMedia('(display-mode: standalone)').matches || window.navigator.
 document.addEventListener('keydown', e => {
   // Escape closes any open modal
   if (e.key === 'Escape') {
+    if (document.getElementById('pricing-modal')?.classList.contains('open')) { document.getElementById('pricing-modal').classList.remove('open'); return; }
     if (document.getElementById('formlink-modal')?.classList.contains('open')) { document.getElementById('formlink-modal').classList.remove('open'); return; }
     if (document.getElementById('msg-modal')?.classList.contains('open')) { closeMsgModal(); return; }
     if (document.getElementById('quick-modal')?.classList.contains('open')) { closeQuickAdd(); return; }
@@ -1318,6 +1344,10 @@ async function copyFormLink(){
   catch(e){ const i=document.getElementById('formlink-input'); i.select(); toast('בחר והעתק ידנית'); }
 }
 
+function openPricing(){
+  document.getElementById('user-dropdown')?.classList.remove('open');
+  document.getElementById('pricing-modal').classList.add('open');
+}
 async function exportMyData() {
   document.getElementById('user-dropdown')?.classList.remove('open');
   toast('📥 מכין קובץ...');

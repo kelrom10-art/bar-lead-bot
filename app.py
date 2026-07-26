@@ -3030,6 +3030,82 @@ async def privacy_page():
 async def terms_page():
     return HTMLResponse(_TERMS_HTML)
 
+_LANDING_HTML = r"""<!doctype html><html lang="he" dir="rtl"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bar Lead Bot — לא לפספס אף ליד</title>
+<meta name="description" content="אפליקציה בעברית לניהול לידים לברים ואירועים — קליטה מוואטסאפ ואינסטגרם בלחיצה, ניסוח הודעות ב-AI, ויומן שמונע כפל הזמנות.">
+<style>
+:root{--bg:#0d0f16;--card:#171a24;--line:#262b3a;--txt:#eef0f6;--txt2:#9aa3b5;--p:#8b7bf0;--b:#4facff;--g:#25d366}
+*{box-sizing:border-box;margin:0;padding:0;font-family:system-ui,'Segoe UI',Arial,sans-serif}
+body{background:var(--bg);color:var(--txt);line-height:1.6}
+.wrap{max-width:760px;margin:0 auto;padding:0 18px}
+.hero{text-align:center;padding:54px 18px 40px}
+.logo{font-size:52px}
+h1{font-size:33px;line-height:1.25;margin:14px 0 10px;background:linear-gradient(90deg,var(--p),var(--b));-webkit-background-clip:text;background-clip:text;color:transparent}
+.sub{font-size:18px;color:var(--txt2);max-width:540px;margin:0 auto 26px}
+.cta{display:inline-block;background:linear-gradient(135deg,var(--p),var(--b));color:#fff;font-weight:800;font-size:18px;padding:16px 40px;border-radius:14px;text-decoration:none;box-shadow:0 8px 30px rgba(139,123,240,.35)}
+.cta.wa{background:linear-gradient(135deg,#25d366,#1da851);box-shadow:0 8px 30px rgba(37,211,102,.3)}
+.note{font-size:13px;color:var(--txt2);margin-top:12px}
+.sec{padding:30px 0}
+.feat{display:flex;gap:14px;align-items:flex-start;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px;margin:12px 0}
+.feat .ic{font-size:30px;flex:0 0 auto}
+.feat h3{font-size:18px;margin-bottom:4px}
+.feat p{color:var(--txt2);font-size:15px}
+.steps{display:flex;flex-direction:column;gap:12px;margin-top:14px}
+.step{display:flex;gap:12px;align-items:center;font-size:16px}
+.step .n{flex:0 0 30px;height:30px;border-radius:50%;background:var(--p);color:#fff;font-weight:800;display:flex;align-items:center;justify-content:center}
+h2{font-size:24px;text-align:center;margin-bottom:4px}
+.price{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:22px;text-align:center;margin-top:14px}
+.price .big{font-size:30px;font-weight:900}
+.foot{text-align:center;color:var(--txt2);font-size:13px;padding:30px 18px 50px}
+.foot a{color:var(--b)}
+</style></head><body>
+
+<div class="hero">
+  <div class="logo">🍸</div>
+  <h1>לא לפספס אף ליד. אף פעם.</h1>
+  <div class="sub">האפליקציה בעברית לבעלי בר ואירועים — קולטת כל פנייה מוואטסאפ ואינסטגרם בלחיצה, מנסחת לך הודעה חזרה, ומזהירה מכפל-הזמנות.</div>
+  <a class="cta" href="/">התחל בחינם ←</a>
+  <div class="note">14 יום ניסיון · בלי כרטיס אשראי · בעברית מלאה</div>
+</div>
+
+<div class="wrap">
+  <div class="sec">
+    <div class="feat"><div class="ic">📲</div><div><h3>קליטת ליד בלחיצה</h3><p>פנייה בוואטסאפ או אינסטגרם? העתק/שתף — והליד נכנס אוטומטית עם שם וטלפון. בלי להקליד.</p></div></div>
+    <div class="feat"><div class="ic">✍️</div><div><h3>ניסוח הודעה ב-AI</h3><p>פולואפ, הצעת מחיר או תזכורת — מנוסח לך בעברית ונפתח בוואטסאפ עם הטקסט מוכן. לחיצה ושולח.</p></div></div>
+    <div class="feat"><div class="ic">📆</div><div><h3>יומן שמונע כפל-הזמנות</h3><p>מסמן תאריך אירוע, ומזהיר אותך בשנייה שאתה מנסה לתפוס תאריך שכבר סגור.</p></div></div>
+    <div class="feat"><div class="ic">📊</div><div><h3>לדעת מה מכניס כסף</h3><p>דוח שמראה איזה ערוץ (אינסטגרם/המלצה) באמת סוגר עסקאות — כדי להשקיע נכון.</p></div></div>
+  </div>
+
+  <div class="sec">
+    <h2>איך זה עובד</h2>
+    <div class="steps">
+      <div class="step"><div class="n">1</div><div>נרשמים בחינם ומתקינים על הנייד (2 דקות).</div></div>
+      <div class="step"><div class="n">2</div><div>כל פנייה חדשה → נכנסת כליד עם תזכורת אוטומטית.</div></div>
+      <div class="step"><div class="n">3</div><div>עונים ללקוח בקליק, סוגרים יותר, ולא שוכחים אף אחד.</div></div>
+    </div>
+  </div>
+
+  <div class="sec">
+    <h2>מחיר פשוט</h2>
+    <div class="price">
+      <div class="big">₪49–₪199 <span style="font-size:16px;color:var(--txt2)">לחודש</span></div>
+      <p style="color:var(--txt2);margin-top:6px">מתחילים ב-14 יום חינם. בלי התחייבות, מבטלים מתי שרוצים.</p>
+      <a class="cta" href="/" style="margin-top:16px">נסה עכשיו בחינם</a>
+    </div>
+  </div>
+
+  <div class="foot">
+    שאלות? <a href="mailto:kelrom10@gmail.com">kelrom10@gmail.com</a><br>
+    <a href="/privacy">מדיניות פרטיות</a> · <a href="/terms">תנאי שימוש</a>
+  </div>
+</div>
+</body></html>"""
+
+@fastapi_app.get("/lp", response_class=HTMLResponse)
+async def landing_page():
+    return HTMLResponse(_LANDING_HTML)
+
 _GUIDE_HTML = """<!doctype html>
 <html lang="he" dir="rtl">
 <head>
