@@ -2093,7 +2093,15 @@ def forgot_password(body: ForgotPasswordRequest):
         return {"message": "אם המשתמש קיים, קוד איפוס נשלח"}
     code = db_create_reset_token(user["id"])
     sent = False
-    if SMTP_HOST:
+    # Preferred free channel: send the code to the user's linked Telegram chat.
+    _chat = db_get_user_chat_id(user["id"])
+    if _chat:
+        try:
+            _send_tg(f"🔑 קוד איפוס הסיסמה שלך ל<b>לידלי</b>: <b>{code}</b>\nהקוד תקף לשעה אחת. אם לא ביקשת — התעלם.", chat_id=_chat)
+            sent = True
+        except Exception as e:
+            logger.warning("reset code via telegram failed: %s", e)
+    if not sent and SMTP_HOST:
         sent = send_email(
             user.get("email", "") or "",
             "קוד איפוס סיסמה — לידלי",
@@ -2877,6 +2885,19 @@ def admin_list_users(admin: dict = Depends(require_admin)):
         """)
         rows = [dict(zip([d[0] for d in cur.description], r)) for r in cur.fetchall()]
     return rows
+
+@fastapi_app.post("/api/admin/users/{uid}/reset-password")
+def admin_reset_password(uid: str, admin: dict = Depends(require_admin)):
+    """Admin sets a fresh temporary password for a user and receives it to hand over."""
+    temp = secrets.token_urlsafe(6)[:8]
+    with _db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT username FROM users WHERE id=%s", (uid,))
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="משתמש לא נמצא")
+        cur.execute("UPDATE users SET password_hash=%s WHERE id=%s", (hash_password(temp), uid))
+    return {"username": row[0], "password": temp}
 
 @fastapi_app.get("/api/admin/stats")
 def admin_stats(admin: dict = Depends(require_admin)):

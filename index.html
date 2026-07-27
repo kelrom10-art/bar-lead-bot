@@ -353,7 +353,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
       <div class="login-logo">🔑</div>
       <div class="login-title">איפוס סיסמה</div>
       <div id="forgot-step1">
-        <div class="login-sub">הכנס שם משתמש ותקבל קוד איפוס</div>
+        <div class="login-sub">הכנס שם משתמש — קוד האיפוס יישלח לטלגרם המקושר שלך. (אם לא חיברת טלגרם, פנה למנהל לאיפוס.)</div>
         <div class="input-group">
           <span class="input-icon">@</span>
           <input id="forgot-username" class="login-input" placeholder="שם משתמש">
@@ -2259,6 +2259,10 @@ async function loadAdmin(){
             <div style="font-size:11px;color:var(--text2)">לידים</div>
           </div>
         </div>
+        <div class="btn-row" style="margin-top:10px">
+          <button class="btn btn-gray btn-sm" style="flex:1" onclick="adminResetPassword('${u.id}','${esc(u.username)}')">🔑 איפוס סיסמה</button>
+          <button class="btn btn-red btn-sm" style="flex:1" onclick="adminDeleteUser('${u.id}','${esc(u.username)}',${u.lead_count||0})">🗑️ מחק משתמש</button>
+        </div>
       </div>`;
     }
     html+=`
@@ -2275,6 +2279,25 @@ async function loadAdmin(){
   }catch(e){
     document.getElementById('admin-content').innerHTML='<div class="empty"><div class="empty-icon">⚠️</div><div>שגיאה</div></div>';
   }
+}
+async function adminResetPassword(uid, username){
+  if(!confirm('לאפס סיסמה למשתמש @'+username+'? תיווצר סיסמה זמנית חדשה שתצטרך למסור לו.')) return;
+  try{
+    const res=await apiFetch('/api/admin/users/'+uid+'/reset-password',{method:'POST'});
+    const d=await res.json().catch(()=>({}));
+    if(res.ok && d.password){ prompt('סיסמה זמנית ל-@'+username+' (העתק ומסור לו):', d.password); }
+    else toast('❌ '+(d.detail||'שגיאה'));
+  }catch(e){ toast('❌ שגיאת חיבור'); }
+}
+async function adminDeleteUser(uid, username, leadCount){
+  if(!confirm('⚠️ למחוק לצמיתות את @'+username+' ואת '+leadCount+' הלידים שלו? אין שחזור.')) return;
+  const typed=prompt('לאישור סופי הקלד: מחק');
+  if((typed||'').trim()!=='מחק'){ toast('בוטל'); return; }
+  try{
+    const res=await apiFetch('/api/admin/users/'+uid,{method:'DELETE'});
+    if(res.ok){ toast('🗑️ המשתמש נמחק'); loadAdmin(); }
+    else { const d=await res.json().catch(()=>({})); toast('❌ '+(d.detail||'שגיאה')); }
+  }catch(e){ toast('❌ שגיאת חיבור'); }
 }
 
 // ── Service Worker ─────────────────────────────────────────────────────────
@@ -2318,27 +2341,82 @@ function _extractPhone(text){
   let m=d.match(/972(5\d{8})/); if(m) return '0'+m[1];
   m=d.match(/(05\d{8})/); if(m) return m[1];
   m=d.match(/(?:^|[^\d])(5\d{8})(?!\d)/); if(m) return '0'+m[1];
+  m=d.match(/972([2-9]\d{7,8})/); if(m) return '0'+m[1];   // landline +972
+  m=d.match(/(0[2-9]\d{7,8})/); if(m) return m[1];          // landline local
   return '';
 }
 function _guessName(text){
   if(!text) return '';
   const fn=text.match(/FN[^:]*:(.+)/i); if(fn) return fn[1].trim().slice(0,60);
   const lines=text.split(/[\r\n]+/).map(s=>s.trim()).filter(Boolean);
+  // prefer a line that looks like "שם: דנה" / "שם דנה"
+  for(const ln of lines){
+    const nm=ln.match(/^\s*(?:שם|שֵם|name)\s*[:\-]?\s*(.+)$/i);
+    if(nm){const c=nm[1].replace(/[+\d().\-]/g,'').trim(); if(c.length>=2) return c.slice(0,60);}
+  }
   for(const ln of lines){
     if(/https?:|wa\.me|whatsapp|\.com/i.test(ln)) continue;
     const clean=ln.replace(/[+\d().\-‪-‮]/g,'').replace(/\s{2,}/g,' ').trim();
-    if(clean.length>=2 && /[א-תA-Za-z]/.test(clean)) return clean.slice(0,60);
+    // accept only short, name-like lines (not full sentences) to avoid garbage
+    if(clean.length>=2 && clean.length<=22 && clean.split(/\s+/).length<=3 && /[א-תA-Za-z]/.test(clean)) return clean.slice(0,60);
   }
   return '';
 }
-function parseLeadText(text){ return {name:_guessName(text), phone:_extractPhone(text)}; }
+const _HE_MONTHS={'ינואר':1,'פברואר':2,'מרץ':3,'אפריל':4,'מאי':5,'יוני':6,'יולי':7,'אוגוסט':8,'ספטמבר':9,'אוקטובר':10,'נובמבר':11,'דצמבר':12};
+function _pad2(n){return String(n).padStart(2,'0');}
+function _extractDateTime(text){
+  if(!text) return {date:'',time:''};
+  const t=text, now=new Date();
+  let Y=null,M=null,D=null,h=null,mi=null;
+  if(/מחרתיים/.test(t)){const d=new Date(now);d.setDate(d.getDate()+2);Y=d.getFullYear();M=d.getMonth()+1;D=d.getDate();}
+  else if(/מחר/.test(t)){const d=new Date(now);d.setDate(d.getDate()+1);Y=d.getFullYear();M=d.getMonth()+1;D=d.getDate();}
+  else if(/היום/.test(t)){Y=now.getFullYear();M=now.getMonth()+1;D=now.getDate();}
+  if(D===null){
+    const m=t.match(/(?:^|[^\d\/.])([0-3]?\d)[\/.](0?[1-9]|1[0-2])(?:[\/.](\d{2,4}))?/);
+    if(m){D=+m[1];M=+m[2];Y=m[3]?(+m[3]<100?2000+(+m[3]):+m[3]):now.getFullYear();}
+  }
+  if(D===null){
+    const m=t.match(/([0-3]?\d)\s*(?:ב|ל)?(ינואר|פברואר|מרץ|אפריל|מאי|יוני|יולי|אוגוסט|ספטמבר|אוקטובר|נובמבר|דצמבר)/);
+    if(m){D=+m[1];M=_HE_MONTHS[m[2]];Y=now.getFullYear();}
+  }
+  let tm=t.match(/(?:בשעה\s*|ב-?\s*)?([0-2]?\d):([0-5]\d)/);
+  if(tm){h=+tm[1];mi=+tm[2];}
+  else{
+    const tm2=t.match(/(?:בשעה\s*|ב-?\s*)([0-2]?\d)\b/);
+    if(tm2){h=+tm2[1];mi=0;}
+    const p=t.match(/([0-2]?\d)\s*(בבוקר|בצהריים|אחה"?צ|אחר הצהריים|בערב|בלילה)/);
+    if(p){h=+p[1];mi=0;if(/ערב|לילה|צהריים|אחה|אחר/.test(p[2])&&h<12&&h!==12)h+=12;}
+  }
+  if(D!==null&&M!==null&&Y===now.getFullYear()){
+    const cand=new Date(Y,M-1,D), today=new Date(now.getFullYear(),now.getMonth(),now.getDate());
+    if(cand<today) Y+=1;
+  }
+  const date=(Y&&M&&D)?`${Y}-${_pad2(M)}-${_pad2(D)}`:'';
+  const time=(h!==null&&h<=23)?`${_pad2(h)}:${_pad2(mi||0)}`:'';
+  return {date,time};
+}
+function parseLeadText(text){
+  const dt=_extractDateTime(text);
+  return {name:_guessName(text), phone:_extractPhone(text), date:dt.date, time:dt.time,
+          isEvent:/אירוע|חתונה|בר מצווה|בת מצווה|מסיבה|ברית|אולם|הפקה/.test(text||'')};
+}
 
+function _applyParsed(p){
+  const set=(id,v)=>{const el=document.getElementById(id); if(el&&v) el.value=v;};
+  set('q-name',p.name); set('q-phone',p.phone);
+  const pad=n=>String(n).padStart(2,'0');
+  const today=(()=>{const d=new Date();return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;})();
+  if(p.time){ set('q-time', `${(p.date||today)}T${p.time}`); }
+  if(p.date && (p.isEvent || !p.time)){ set('q-event', p.date); if(typeof checkEventDate==='function') checkEventDate(p.date,'q-event-warn'); }
+  const bits=[]; if(p.name)bits.push(p.name); if(p.phone)bits.push(p.phone);
+  if(p.date)bits.push(p.date); if(p.time)bits.push(p.time);
+  return bits;
+}
 function fillQuickFrom(text){
-  const {name,phone}=parseLeadText(text);
+  const p=parseLeadText(text);
   openQuickAdd();
-  document.getElementById('q-name').value=name||'';
-  document.getElementById('q-phone').value=phone||'';
-  toast(phone||name ? '📲 מולא מוואטסאפ — בדקו ואשרו' : 'לא זוהו פרטים — מלאו ידנית');
+  const bits=_applyParsed(p);
+  toast(bits.length ? ('📲 זוהה: '+bits.join(' · ')) : 'לא זוהו פרטים — מלאו ידנית');
 }
 
 async function pasteFromWhatsapp(){
@@ -2346,10 +2424,9 @@ async function pasteFromWhatsapp(){
   try{ if(navigator.clipboard&&navigator.clipboard.readText){ text=await navigator.clipboard.readText(); } }catch(e){}
   if(!text || !text.trim()){ text=prompt('הדביקו כאן את ההודעה או איש הקשר מוואטסאפ:')||''; }
   if(!text.trim()) return;
-  const {name,phone}=parseLeadText(text);
-  if(name) document.getElementById('q-name').value=name;
-  if(phone) document.getElementById('q-phone').value=phone;
-  toast(phone ? ('📲 זוהה: '+((name?name+' · ':''))+phone) : 'לא זוהה מספר — נסו להדביק שוב');
+  const p=parseLeadText(text);
+  const bits=_applyParsed(p);
+  toast(bits.length ? ('📲 זוהה: '+bits.join(' · ')) : 'לא זוהו פרטים — נסו שוב');
 }
 
 // Share Target: capture shared text (?text/?title/?url) on load, consume after login
