@@ -3138,7 +3138,7 @@ _GUIDE_HTML = """<!doctype html>
 </head>
 <body>
   <div class="hero">
-    <div class="logo">🎯</div>
+    <div class="logo"><img src="/icon-192.png" alt="לידלי" style="width:88px;height:88px;border-radius:22px"></div>
     <h1>לידלי</h1>
     <div class="sub">מדריך מהיר · התקנה ב-2 דקות</div>
   </div>
