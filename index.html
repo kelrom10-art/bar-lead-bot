@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#07070e">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>לידים לאירועים 🎯</title>
+<title>לידלי 🎯</title>
 <link rel="manifest" href="/manifest.json">
 <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
 <link rel="apple-touch-icon" href="/icon-192.png">
@@ -289,7 +289,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
     <div class="login-aurora"></div>
     <div class="login-card">
       <div class="login-logo">🎯</div>
-      <div class="login-title">לידים לאירועים</div>
+      <div class="login-title">לידלי</div>
       <div class="login-sub">ניהול לידים חכם לספקי אירועים</div>
       <form onsubmit="submitLogin(event)">
         <div class="input-group">
@@ -600,8 +600,8 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
         3. הוסף פעולה <b>"פתח כתובות אתר"</b> והדבק:<br>
         <code style="direction:ltr;display:inline-block;background:var(--card2,#222634);padding:2px 6px;border-radius:5px;margin:3px 0;font-size:11px;word-break:break-all">https://bar-lead-bot.onrender.com/?text=</code>
         ומיד אחרי הכתובת הכנס את משתנה <b>"טקסט מקודד"</b>.<br>
-        4. בהגדרות הקיצור (i) ← הפעל <b>"הצג בגיליון השיתוף"</b>, קבל <b>טקסט</b>, וקרא לו <b>"לידים לאירועים"</b>.<br>
-        <br>מעכשיו: בוואטסאפ או אינסטגרם ← <b>שתף</b> הודעה ← <b>לידים לאירועים</b> ← הליד ייפתח מלא. ✅
+        4. בהגדרות הקיצור (i) ← הפעל <b>"הצג בגיליון השיתוף"</b>, קבל <b>טקסט</b>, וקרא לו <b>"לידלי"</b>.<br>
+        <br>מעכשיו: בוואטסאפ או אינסטגרם ← <b>שתף</b> הודעה ← <b>לידלי</b> ← הליד ייפתח מלא. ✅
       </div>
     </details>
     <form id="quick-form" onsubmit="submitQuick(event)">
@@ -1373,7 +1373,7 @@ async function deleteMyAccount() {
     const res = await fetch('/api/me', {method:'DELETE', headers:{Authorization:'Bearer '+token}});
     if (res.ok) {
       localStorage.removeItem('auth_token'); localStorage.removeItem('user_info');
-      alert('החשבון והמידע נמחקו. תודה שהשתמשת ב"לידים לאירועים".');
+      alert('החשבון והמידע נמחקו. תודה שהשתמשת ב"לידלי".');
       location.href = '/';
     } else { toast('❌ שגיאה במחיקה'); }
   } catch(e){ toast('❌ שגיאת חיבור'); }
@@ -1564,7 +1564,7 @@ async function loadToday() {
       html+=`
       <div class="onboarding-card">
         <div class="ob-icon">🚀</div>
-        <h2>ברוך הבא ל"לידים לאירועים"!</h2>
+        <h2>ברוך הבא ל"לידלי"!</h2>
         <p>הכל מוכן. הוסף את הליד הראשון שלך עכשיו ותתחיל לעקוב אחר הפייפליין שלך.</p>
         <div class="ob-steps">
           <div class="ob-step"><strong>1. הוסף ליד ➕</strong>לחץ על כפתור "הוסף" למטה</div>
