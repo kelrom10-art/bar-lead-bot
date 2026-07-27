@@ -1237,7 +1237,7 @@ async def cmd_start(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if linked:
             await u.message.reply_text(
                 f"✅ *הצלחה!* החשבון של *{linked.get('display_name') or linked.get('username')}* מקושר.\n"
-                "מעכשיו תקבל כאן את התזכורות שלך. 🍸",
+                "מעכשיו תקבל כאן את התזכורות שלך. 🎯",
                 parse_mode="Markdown", reply_markup=MAIN_MENU)
             return
         await u.message.reply_text("❌ קוד קישור לא תקין או שפג. קבל קוד חדש מהאפליקציה.", reply_markup=MAIN_MENU)
@@ -1246,7 +1246,7 @@ async def cmd_start(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await u.message.reply_text(_LINK_PROMPT, parse_mode="Markdown")
         return
     await u.message.reply_text(
-        "👋 *שלום! בוט ניהול הלידים שלך* 🍸\n\nבחר פעולה:",
+        "👋 *שלום! בוט ניהול הלידים שלך* 🎯\n\nבחר פעולה:",
         parse_mode="Markdown", reply_markup=MAIN_MENU)
 
 async def show_today(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1705,7 +1705,7 @@ async def job_weekly_report(app):
                 chat_id=usr["telegram_chat_id"],
                 text=f"📊 *דוח שבועי*\n\n"
                      f"לידים: {s['total']} | ✅ נסגרו: {s['won_count']} | ❌ אבדו: {s['lost']}\n"
-                     f"💰 הכנסות: ₪{s['won_amount']:,.0f} | המרה: {rate}\n\nשבוע מוצלח! 🍸",
+                     f"💰 הכנסות: ₪{s['won_amount']:,.0f} | המרה: {rate}\n\nשבוע מוצלח! 🎯",
                 parse_mode="Markdown")
         except Exception as e:
             logger.warning(f"weekly [{usr['id']}]: {e}")
@@ -1886,7 +1886,7 @@ async def lifespan(app: FastAPI):
     scheduler.start()
     logger.info("Scheduler ✓")
 
-    logger.info("🍸 Bar Lead Manager v4.0 started")
+    logger.info("🎯 Leads-for-Events v4.0 started")
     yield
 
     scheduler.shutdown(wait=False)
@@ -2096,7 +2096,7 @@ def forgot_password(body: ForgotPasswordRequest):
     if SMTP_HOST:
         sent = send_email(
             user.get("email", "") or "",
-            "קוד איפוס סיסמה — Bar Lead Manager",
+            "קוד איפוס סיסמה — לידים לאירועים",
             f"<p>קוד האיפוס שלך: <strong>{code}</strong></p>"
             f"<p>הקוד תקף לשעה אחת.</p>"
         )
@@ -2128,7 +2128,7 @@ self.addEventListener('activate', e => e.waitUntil(clients.claim()));
 self.addEventListener('push', function(event) {
   var data = {};
   try { data = event.data.json(); } catch(e) {}
-  var title = data.title || 'Bar Lead Manager 🍸';
+  var title = data.title || 'לידים לאירועים 🎯';
   var opts = {
     body:      data.body || '',
     icon:      '/icon-192.png',
@@ -2181,8 +2181,8 @@ def serve_sw():
 def serve_manifest():
     from fastapi.responses import JSONResponse
     return JSONResponse({
-        "name": "Bar Lead Manager",
-        "short_name": "Bar Leads",
+        "name": "לידים לאירועים",
+        "short_name": "לידים",
         "start_url": "/",
         "scope": "/",
         "display": "standalone",
@@ -2454,14 +2454,14 @@ INTENT_HEB = {
 _PHRASES = {
     "intro": {
         "friendly": [
-            "היי {n}! נעים להכיר 🙌 קיבלנו את הפנייה שלך ל{b}. ספר/י לי קצת על האירוע — כמה אנשים ומתי בערך? נשמח להתאים לך בדיוק מה שצריך 🍸",
+            "היי {n}! נעים להכיר 🙌 קיבלנו את הפנייה שלך ל{b}. ספר/י לי קצת על האירוע — כמה אנשים ומתי בערך? נשמח להתאים לך בדיוק מה שצריך 🎉",
             "היי {n}! תודה שפנית ל{b} 🙏 אשמח לשמוע מה חוגגים ומתי, כדי שאבנה לך הצעה שמתאימה בול.",
         ],
         "formal":   [
             "שלום {n}, תודה על פנייתך ל{b}. נשמח לקבל פרטים על האירוע (תאריך, מספר משתתפים ואופי האירוע) על מנת להיערך בהתאם ולהכין עבורך הצעה מתאימה.",
         ],
         "short":    [
-            "היי {n}! קיבלנו את הפנייה ל{b} 🍸 מתי האירוע וכמה אנשים בערך?",
+            "היי {n}! קיבלנו את הפנייה ל{b} 🎉 מתי האירוע וכמה אנשים בערך?",
         ],
     },
     "followup": {
@@ -2710,7 +2710,7 @@ button{width:100%;margin-top:20px;background:linear-gradient(135deg,var(--accent
     <button onclick="send()" id="btn">שליחה 🚀</button>
   </div>
   <div id="done" class="ok hide"><div class="big">✅</div><h1>תודה!</h1><div class="sub">הפרטים נשלחו, נחזור אליך בקרוב 🙌</div></div>
-  <div class="foot">מופעל ע״י Bar Lead Bot</div>
+  <div class="foot">מופעל ע״י לידים לאירועים</div>
 </div>
 <script>
 async function send(){
@@ -2900,7 +2900,7 @@ def _legal_page(title_txt: str, body_html: str) -> str:
     return (
         "<!doctype html><html lang='he' dir='rtl'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-        f"<title>{title_txt} — Bar Lead Manager</title>"
+        f"<title>{title_txt} — לידים לאירועים</title>"
         "<style>body{font-family:system-ui,'Segoe UI',Arial,sans-serif;background:#0f1117;"
         "color:#e6e8ee;line-height:1.7;max-width:760px;margin:0 auto;padding:28px 20px 60px}"
         "h1{color:#4facff;font-size:26px}h2{color:#b49aff;font-size:19px;margin-top:26px}"
@@ -2914,7 +2914,7 @@ def _legal_page(title_txt: str, body_html: str) -> str:
     )
 
 _PRIVACY_HTML = _legal_page("מדיניות פרטיות", (
-    "<p>מדיניות זו מסבירה כיצד <b>Bar Lead Manager</b> (\"השירות\", \"אנחנו\") אוסף, משתמש, "
+    "<p>מדיניות זו מסבירה כיצד <b>לידים לאירועים</b> (\"השירות\", \"אנחנו\") אוסף, משתמש, "
     "משתף ומגן על מידע אישי, בהתאם ל<b>חוק הגנת הפרטיות, התשמ\"א-1981 ותיקוניו, לרבות תיקון 13</b> "
     "(שנכנס לתוקף ב-14.8.2025) והתקנות מכוחו.</p>"
 
@@ -2982,7 +2982,7 @@ _PRIVACY_HTML = _legal_page("מדיניות פרטיות", (
 ))
 
 _TERMS_HTML = _legal_page("תנאי שימוש", (
-    "<p>השימוש ב-<b>Bar Lead Manager</b> (\"השירות\") כפוף לתנאים הבאים. שימוש בשירות מהווה הסכמה מלאה להם "
+    "<p>השימוש ב-<b>לידים לאירועים</b> (\"השירות\") כפוף לתנאים הבאים. שימוש בשירות מהווה הסכמה מלאה להם "
     "ולמדיניות הפרטיות.</p>"
     "<h2>1. השירות</h2>"
     "<p>השירות מספק כלי לניהול לידים, תזכורות, יומן והתראות לבעלי עסקי אירועים. אנו שואפים לזמינות גבוהה "
@@ -3032,8 +3032,8 @@ async def terms_page():
 
 _LANDING_HTML = r"""<!doctype html><html lang="he" dir="rtl"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Bar Lead Bot — לא לפספס אף ליד</title>
-<meta name="description" content="אפליקציה בעברית לניהול לידים לברים ואירועים — קליטה מוואטסאפ ואינסטגרם בלחיצה, ניסוח הודעות ב-AI, ויומן שמונע כפל הזמנות.">
+<title>לידים לאירועים — לא לפספס אף ליד</title>
+<meta name="description" content="אפליקציה בעברית לניהול לידים לספקי אירועים (קייטרינג, שף, בר, אטרקציות) — קליטה מוואטסאפ ואינסטגרם בלחיצה, ניסוח הודעות ב-AI, ויומן שמונע כפל הזמנות.">
 <style>
 :root{--bg:#0d0f16;--card:#171a24;--line:#262b3a;--txt:#eef0f6;--txt2:#9aa3b5;--p:#8b7bf0;--b:#4facff;--g:#25d366}
 *{box-sizing:border-box;margin:0;padding:0;font-family:system-ui,'Segoe UI',Arial,sans-serif}
@@ -3062,9 +3062,9 @@ h2{font-size:24px;text-align:center;margin-bottom:4px}
 </style></head><body>
 
 <div class="hero">
-  <div class="logo">🍸</div>
+  <div class="logo">🎯</div>
   <h1>לא לפספס אף ליד. אף פעם.</h1>
-  <div class="sub">האפליקציה בעברית לבעלי בר ואירועים — קולטת כל פנייה מוואטסאפ ואינסטגרם בלחיצה, מנסחת לך הודעה חזרה, ומזהירה מכפל-הזמנות.</div>
+  <div class="sub">האפליקציה בעברית לספקי אירועים — קייטרינג, שף, בר, אטרקציות. קולטת כל פנייה מוואטסאפ ואינסטגרם בלחיצה, מנסחת לך הודעה חזרה, ומזהירה מכפל-הזמנות.</div>
   <a class="cta" href="/">התחל בחינם ←</a>
   <div class="note">14 יום ניסיון · בלי כרטיס אשראי · בעברית מלאה</div>
 </div>
@@ -3111,7 +3111,7 @@ _GUIDE_HTML = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Bar Lead Bot — מדריך מהיר</title>
+<title>לידים לאירועים — מדריך מהיר</title>
 <style>
   :root{--bg:#0f1117;--card:#1a1d27;--card2:#222634;--line:#2a2f3e;--txt:#e6e8ee;--txt2:#9aa3b5;--purple:#8b7bf0;--blue:#4facff;--green:#28c990;--red:#ff5d6c}
   *{box-sizing:border-box;margin:0;padding:0}
@@ -3138,8 +3138,8 @@ _GUIDE_HTML = """<!doctype html>
 </head>
 <body>
   <div class="hero">
-    <div class="logo">🍸</div>
-    <h1>Bar Lead Bot</h1>
+    <div class="logo">🎯</div>
+    <h1>לידים לאירועים</h1>
     <div class="sub">מדריך מהיר · התקנה ב-2 דקות</div>
   </div>
   <div class="card">
@@ -3190,7 +3190,7 @@ async def guide_page():
 
 _AD_HTML = """<!doctype html><html lang="he" dir="rtl"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>מודעת גיוס — Bar Lead Bot</title>
+<title>מודעת גיוס — לידים לאירועים</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;700;800;900&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
@@ -3234,7 +3234,7 @@ _AD_HTML = """<!doctype html><html lang="he" dir="rtl"><head>
  <div class="vig"></div>
  <div class="wrap">
   <div class="pill">5 מקומות בלבד · פיילוט חינם</div>
-  <div class="glass">🍸</div>
+  <div class="glass">🎯</div>
   <h1>מחפשים <b>5</b> בעלי בר</h1>
   <div class="sub">פיילוט חינם — 30 יום</div>
   <div class="phone"><div class="scr"><div class="gloss"></div>
@@ -3252,7 +3252,7 @@ _AD_HTML = """<!doctype html><html lang="he" dir="rtl"><head>
   </div>
   <div class="cta">שלחו לי הודעה ‹‹</div>
  </div>
- <div class="foot">Bar Lead Bot · ניהול לידים לאנשי אירועים</div>
+ <div class="foot">לידים לאירועים · ניהול לידים לאנשי אירועים</div>
 </div></div>
 <button class="dlbtn" onclick="dl(this)">📥 הורדת התמונה</button>
 <div class="hint">לחצו על הכפתור כדי לשמור את המודעה כתמונה (PNG) — מוכן לשיתוף באינסטגרם, סטטוס וואטסאפ וקבוצות.</div>
