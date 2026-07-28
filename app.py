@@ -181,7 +181,7 @@ def ensure_db():
         # Add new columns to existing databases
         for col, default in [
             ("tags", "''"), ("created_by", "''"), ("source", "''"),
-            ("package", "''"), ("user_id", "''"), ("event_date", "''"),
+            ("package", "''"), ("user_id", "''"), ("event_date", "''"), ("paid", "''"),
         ]:
             cur.execute(f"ALTER TABLE leads ADD COLUMN IF NOT EXISTS {col} TEXT DEFAULT {default}")
         # Users table
@@ -1938,6 +1938,7 @@ class LeadUpdate(BaseModel):
     source:         Optional[str]   = None
     package:        Optional[str]   = None
     event_date:     Optional[str]   = None
+    paid:           Optional[str]   = None
 
 class RegisterRequest(BaseModel):
     username:     str = Field(..., min_length=3, max_length=50)

@@ -1535,94 +1535,85 @@ document.querySelectorAll('#edit-tags-row .tag-btn').forEach(b => {
 });
 
 // ── TODAY ──────────────────────────────────────────────────────────────────
+function _isoDate(d){const p=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;}
+function _todayRow(l, extra, badge){
+  const src = l.source ? `<span class="source-chip" style="margin-right:4px">${SRC_EMO[l.source]||''} ${SRC_LBL[l.source]||l.source}</span>` : '';
+  const bd  = badge ? `<span style="font-size:11px;color:var(--accent);font-weight:700">${esc(badge)}</span>` : '';
+  const wa  = `<a href="${waLink(l.phone)}" target="_blank" class="today-call" onclick="event.stopPropagation()" title="WhatsApp" style="width:36px;height:36px;font-size:16px">💬</a>`;
+  const call= `<a href="tel:${esc(l.phone)}" class="today-call" onclick="event.stopPropagation()" title="התקשר" style="width:36px;height:36px;font-size:16px;background:rgba(79,172,255,.15);color:var(--blue);border-color:rgba(79,172,255,.25)">📞</a>`;
+  return `<div class="today-item" onclick="openLead('${l.id}')">
+    <div class="today-info">
+      <div class="today-name">${leadHeat(l)?leadHeat(l)+' ':''}${esc(l.name)}</div>
+      <div class="today-phone">${esc(l.phone)}${src?'&nbsp;'+src:''}${bd?'&nbsp;'+bd:''}</div>
+    </div>${wa}${call}${extra||''}</div>`;
+}
+const _btnHandled = l=>`<button class="today-call" onclick="event.stopPropagation();markHandled('${l.id}')" title="סמן כטופל" style="width:36px;height:36px;font-size:15px;font-family:inherit;cursor:pointer;background:rgba(0,212,160,.15);color:var(--green);border:1px solid rgba(0,212,160,.25)">✓</button>`;
+const _btnTomorrow = l=>`<button class="today-call" onclick="event.stopPropagation();snoozeLead('${l.id}','tomorrow10')" title="דחה למחר" style="width:36px;height:36px;font-size:14px;font-family:inherit;cursor:pointer;background:rgba(255,192,72,.15);color:#ffc048;border:1px solid rgba(255,192,72,.3)">⏭</button>`;
+const _btnPaid = l=>`<button class="today-call" onclick="event.stopPropagation();markPaid('${l.id}')" title="סמן כשולם" style="width:auto;padding:0 12px;height:36px;font-size:13px;font-weight:700;font-family:inherit;cursor:pointer;background:rgba(0,212,160,.15);color:var(--green);border:1px solid rgba(0,212,160,.25);border-radius:20px">💰 שולם</button>`;
+function _section(title, items, rowFn){
+  if(!items.length) return '';
+  let h=`<div class="section-title" style="padding:0 12px">${title} (${items.length})</div><div class="today-list">`;
+  for(const l of items) h+=rowFn(l);
+  return h+'</div>';
+}
+async function markHandled(id){
+  try{ const r=await apiFetch('/api/leads/'+id,{method:'PUT',body:JSON.stringify({status:'called'})}); if(r.ok){toast('✓ סומן כטופל');loadToday();} else toast('❌ שגיאה'); }catch(e){ toast('❌ שגיאת חיבור'); }
+}
+async function markPaid(id){
+  try{ const r=await apiFetch('/api/leads/'+id,{method:'PUT',body:JSON.stringify({paid:'1'})}); if(r.ok){toast('💰 סומן כשולם');_availCache=null;loadToday();} else toast('❌ שגיאה'); }catch(e){ toast('❌ שגיאת חיבור'); }
+}
 async function loadToday() {
   try {
-    const [todayLeads, stats] = await Promise.all([
-      apiFetch('/api/leads/today').then(r=>r.json()),
+    const [all, stats] = await Promise.all([
+      apiFetch('/api/leads').then(r=>r.json()),
       apiFetch('/api/stats').then(r=>r.json())
     ]);
+    const leads = Array.isArray(all) ? all : [];
     const m   = stats.monthly||{};
     const rev = (m.won_amount||0).toLocaleString('he-IL',{maximumFractionDigits:0});
-    const conv= m.total ? Math.round((m.won_count||0)/m.total*100) : 0;
-    const active = todayLeads.filter(l=>['new','pre_reminded','called','follow_up'].includes(l.status));
-    const done   = todayLeads.filter(l=>['won','lost'].includes(l.status));
+    const now = new Date(), todayISO=_isoDate(now);
+    const wkEnd=new Date(now); wkEnd.setDate(wkEnd.getDate()+7); const wkISO=_isoDate(wkEnd);
 
-    let html = `
-    <div class="hero-card">
-      <div style="font-size:11px;color:var(--text2);font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;">💰 הכנסות החודש</div>
-      <div class="hero-rev">&#8362;${rev}</div>
-      <div class="hero-sub">${m.won_count||0} עסקאות · ${m.total||0} לידים · ${conv}% המרה</div>
-      <div class="hero-row">
-        <div class="hero-stat"><div class="hero-stat-num" style="color:var(--green)">${m.won_count||0}</div><div class="hero-stat-lbl">נסגרו</div></div>
-        <div class="hero-stat"><div class="hero-stat-num" style="color:var(--red)">${m.lost||0}</div><div class="hero-stat-lbl">אבדו</div></div>
-        <div class="hero-stat"><div class="hero-stat-num" style="color:var(--blue)">${stats.active||0}</div><div class="hero-stat-lbl">פעילים</div></div>
-      </div>
-    </div>`;
-
-    // ── ONBOARDING ── show when account has no leads yet
     if ((stats.total||0) === 0) {
-      html+=`
+      document.getElementById('today-content').innerHTML=`
       <div class="onboarding-card">
         <div class="ob-icon">🚀</div>
         <h2>ברוך הבא ל"לידלי"!</h2>
         <p>הכל מוכן. הוסף את הליד הראשון שלך עכשיו ותתחיל לעקוב אחר הפייפליין שלך.</p>
-        <div class="ob-steps">
-          <div class="ob-step"><strong>1. הוסף ליד ➕</strong>לחץ על כפתור "הוסף" למטה</div>
-          <div class="ob-step"><strong>2. קבע שיחה 📅</strong>הגדר תאריך ושעת יצירת קשר</div>
-          <div class="ob-step"><strong>3. עקוב אחר סטאטוס 📊</strong>עדכן אם דיברת, נסגר, אבד</div>
-          <div class="ob-step"><strong>4. ראה ביצועים 📈</strong>מעקב המרות בלשונית סטטיסטיקה</div>
-        </div>
-        <button class="btn btn-blue" onclick="openQuickAdd()" style="width:100%;padding:16px;font-size:16px;font-weight:700">
-          ➕ הוסף ליד ראשון
-        </button>
+        <button class="btn btn-blue" onclick="openQuickAdd()" style="width:100%;padding:16px;font-size:16px;font-weight:700">➕ הוסף ליד ראשון</button>
       </div>`;
-    } else if (active.length) {
-      // Sort chronologically by call time (no-time items last)
-      active.sort((a,b)=>{
-        const ta=a.call_time?new Date(a.call_time).getTime():Infinity;
-        const tb=b.call_time?new Date(b.call_time).getTime():Infinity;
-        return ta-tb;
-      });
-      const overdueCount = active.filter(l=>l.call_time && new Date(l.call_time).getTime() < Date.now()).length;
-      if (overdueCount) {
-        html+=`<div style="margin:0 12px 10px;background:rgba(229,72,77,.12);border:1px solid rgba(229,72,77,.35);border-radius:12px;padding:10px 14px;color:var(--red);font-size:13px;font-weight:700">⏰ ${overdueCount} ${overdueCount===1?'שיחה שעבר זמנה':'שיחות שעבר זמנן'} — כדאי לחזור אליהן</div>`;
-      }
-      html+=`<div class="section-title" style="padding:0 12px">📅 שיחות היום (${active.length})</div><div class="today-list">`;
-      for (const l of active) {
-        const dt  = l.call_time ? new Date(l.call_time) : null;
-        const tStr= dt ? `${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}` : '—';
-        const overdue = dt && dt.getTime() < Date.now();
-        const timeColor = overdue ? 'var(--red)' : (ST_COLOR[l.status]||'var(--text)');
-        const rel = dt ? `<span style="font-size:10px;color:${overdue?'var(--red)':'var(--text2)'};font-weight:600">${relTime(dt)}</span>` : '';
-        const src = l.source ? `<span class="source-chip" style="margin-right:4px">${SRC_EMO[l.source]||''} ${SRC_LBL[l.source]||l.source}</span>` : '';
-        html+=`<div class="today-item${overdue?' overdue':''}" onclick="openLead('${l.id}')"${overdue?' style="border-right:3px solid var(--red)"':''}>
-          <div class="today-time" style="color:${timeColor};display:flex;flex-direction:column;align-items:center;gap:1px">${tStr}${rel}</div>
-          <div class="today-info">
-            <div class="today-name">${esc(l.name)}${overdue?' <span style="font-size:10px;color:var(--red);font-weight:700">⏰ עבר הזמן</span>':''}</div>
-            <div class="today-phone">${esc(l.phone)}${src?'&nbsp;'+src:''}</div>
-          </div>
-          <a href="${waLink(l.phone)}" target="_blank" class="today-call" onclick="event.stopPropagation()" title="WhatsApp" aria-label="וואטסאפ ל-${esc(l.name)}" style="margin-left:4px">💬</a>
-          <a href="tel:${esc(l.phone)}" class="today-call" onclick="event.stopPropagation()" title="התקשר" aria-label="התקשר ל-${esc(l.name)}">📞</a>
-        </div>`;
-      }
-      html+='</div>';
-    } else {
-      html+=`<div class="empty" style="padding:40px 20px"><div class="empty-icon">✅</div><div>אין שיחות היום — כל הכבוד!</div></div>`;
+      return;
     }
 
-    if (done.length) {
-      html+=`<div class="section-title" style="padding:0 12px">✔ סיימו היום (${done.length})</div><div class="today-list">`;
-      for (const l of done) {
-        const amt = l.sale_amount ? `<span style="color:var(--green);font-weight:700">&#8362;${Number(l.sale_amount).toLocaleString()}</span>` : '';
-        html+=`<div class="today-item" onclick="openLead('${l.id}')">
-          <div class="today-time" style="color:${ST_COLOR[l.status]||'var(--text)'}">${l.status_emoji}</div>
-          <div class="today-info"><div class="today-name">${esc(l.name)}</div><div class="today-phone">${esc(l.phone)}</div></div>
-          ${amt}
-        </div>`;
-      }
-      html+='</div>';
-    }
+    const newLeads   = leads.filter(l=>l.status==='new');
+    const followUps  = leads.filter(l=>l.status==='follow_up' || l.status==='pre_reminded');
+    const awaitingDep= leads.filter(l=>l.status==='won' && l.paid!=='1' && Number(l.sale_amount)>0);
+    const eventsWeek = leads.filter(l=>l.event_date && l.event_date>=todayISO && l.event_date<=wkISO && l.status!=='lost')
+                            .sort((a,b)=>String(a.event_date).localeCompare(String(b.event_date)));
+    const uncollected= awaitingDep.reduce((s,l)=>s+(Number(l.sale_amount)||0),0);
 
+    let html = `
+    <div class="hero-card">
+      <div style="font-size:11px;color:var(--text2);font-weight:700;letter-spacing:1px;margin-bottom:6px;">💰 הכנסות החודש</div>
+      <div class="hero-rev">&#8362;${rev}</div>
+      <div class="hero-sub">${m.won_count||0} עסקאות · ${m.total||0} לידים</div>
+      <div class="hero-row">
+        <div class="hero-stat"><div class="hero-stat-num" style="color:#ffc048">&#8362;${uncollected.toLocaleString()}</div><div class="hero-stat-lbl">עוד לא נגבה</div></div>
+        <div class="hero-stat"><div class="hero-stat-num" style="color:var(--blue)">${newLeads.length}</div><div class="hero-stat-lbl">חדשים</div></div>
+        <div class="hero-stat"><div class="hero-stat-num" style="color:var(--accent)">${eventsWeek.length}</div><div class="hero-stat-lbl">אירועים השבוע</div></div>
+      </div>
+    </div>
+    <div class="section-title" style="padding:10px 12px 0;font-size:16px">📋 מה צריך לעשות היום</div>`;
+
+    const rowAct = l=>_todayRow(l, _btnHandled(l)+_btnTomorrow(l));
+    html += _section('🆕 חדשים — עוד לא ענית', newLeads, rowAct);
+    html += _section('🔄 ממתינים לפולואפ', followUps, rowAct);
+    html += _section('💰 ממתינות למקדמה / תשלום', awaitingDep, l=>_todayRow(l, _btnPaid(l), '₪'+Number(l.sale_amount).toLocaleString()));
+    html += _section('📆 אירועים השבוע', eventsWeek, l=>_todayRow(l, '', '📆 '+l.event_date));
+
+    if (!newLeads.length && !followUps.length && !awaitingDep.length && !eventsWeek.length) {
+      html+=`<div class="empty" style="padding:40px 20px"><div class="empty-icon">🎉</div><div>אין משימות פתוחות כרגע — כל הכבוד!</div></div>`;
+    }
     document.getElementById('today-content').innerHTML=html;
   } catch(e) {
     document.getElementById('today-content').innerHTML='<div class="empty"><div class="empty-icon">⚠️</div><div>שגיאה</div></div>';
