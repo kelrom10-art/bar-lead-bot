@@ -452,27 +452,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
       <div class="filter-tab" data-status="lost" onclick="setFilter('lost')">❌ אבד</div>
       <div class="filter-tab" data-status="old" onclick="setFilter('old')">📁 ישן</div>
     </div>
-    <div class="source-filter" id="source-filter" style="display:none">
-      <div class="source-tab active" data-src="" onclick="setSourceFilter('')">כל המקורות</div>
-      <div class="source-tab" data-src="instagram" onclick="setSourceFilter('instagram')">📸 אינסטגרם</div>
-      <div class="source-tab" data-src="facebook" onclick="setSourceFilter('facebook')">👤 פייסבוק</div>
-      <div class="source-tab" data-src="tiktok" onclick="setSourceFilter('tiktok')">🎵 טיקטוק</div>
-      <div class="source-tab" data-src="referral" onclick="setSourceFilter('referral')">🤝 המלצה</div>
-      <div class="source-tab" data-src="website" onclick="setSourceFilter('website')">🌐 אתר</div>
-      <div class="source-tab" data-src="phone" onclick="setSourceFilter('phone')">📞 טלפון</div>
-    </div>
-    <div class="sort-row">
-      <span>מיון:</span>
-      <button class="sort-btn active" id="sort-time" onclick="setSort('time')">⏰ זמן</button>
-      <button class="sort-btn" id="sort-name" onclick="setSort('name')">א-ב שם</button>
-      <button class="sort-btn" id="sort-amount" onclick="setSort('amount')">💰 סכום</button>
-      <button class="src-toggle-btn" id="src-toggle-btn" onclick="toggleSourceFilter()">מקור</button>
-    </div>
     <div class="swipe-hint-bar" id="swipe-hint" style="display:none">← החלק ליד שמאל=אבד | ימין=נסגר →</div>
-    <div class="view-toggle">
-      <button class="view-btn active" id="vbtn-list" onclick="switchView('list')">☰ רשימה</button>
-      <button class="view-btn" id="vbtn-pipe" onclick="switchView('pipe')">▦ פייפליין</button>
-    </div>
     <div class="leads-list" id="leads-list"></div>
     <div id="pipeline-view"></div>
   </div>
@@ -506,28 +486,6 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
             <option value="phone">📞 טלפון נכנס</option>
             <option value="other">אחר</option>
           </select>
-        </div>
-        <div class="form-group">
-          <label class="form-label">📦 חבילה / תוכנית</label>
-          <select id="add-package" class="form-select">
-            <option value="">— בחר חבילה —</option>
-            <option value="basic">בסיסי</option>
-            <option value="standard">סטנדרט</option>
-            <option value="premium">פרמיום ⭐</option>
-            <option value="vip">VIP 👑</option>
-            <option value="custom">מותאם אישית</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label class="form-label">🏷️ תגיות אירוע</label>
-          <div class="tags-row" id="add-tags-row">
-            <button type="button" class="tag-btn" data-tag="חתונה">💍 חתונה</button>
-            <button type="button" class="tag-btn" data-tag="בר מצווה">🎊 בר מצווה</button>
-            <button type="button" class="tag-btn" data-tag="בת מצווה">🎀 בת מצווה</button>
-            <button type="button" class="tag-btn" data-tag="מסיבה">🎉 מסיבה</button>
-            <button type="button" class="tag-btn" data-tag="ברית">🍼 ברית</button>
-            <button type="button" class="tag-btn" data-tag="אחר">אחר</button>
-          </div>
         </div>
         <div class="form-group">
           <label class="form-label">📝 הערות</label>
@@ -626,31 +584,18 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
         <label class="form-label">📱 טלפון *</label>
         <input id="q-phone" class="form-input" type="tel" inputmode="tel" placeholder="05X-XXXXXXX" required autocomplete="tel">
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-        <div class="form-group" style="margin-bottom:0">
-          <label class="form-label">📣 מקור</label>
-          <select id="q-source" class="form-select">
-            <option value="">— מקור —</option>
-            <option value="instagram">📸 אינסטגרם</option>
-            <option value="facebook">👤 פייסבוק</option>
-            <option value="tiktok">🎵 טיקטוק</option>
-            <option value="referral">🤝 המלצה</option>
-            <option value="website">🌐 אתר</option>
-            <option value="phone">📞 טלפון נכנס</option>
-            <option value="other">אחר</option>
-          </select>
-        </div>
-        <div class="form-group" style="margin-bottom:0">
-          <label class="form-label">📦 חבילה</label>
-          <select id="q-package" class="form-select">
-            <option value="">— חבילה —</option>
-            <option value="basic">בסיסי</option>
-            <option value="standard">סטנדרט</option>
-            <option value="premium">פרמיום ⭐</option>
-            <option value="vip">VIP 👑</option>
-            <option value="custom">מותאם</option>
-          </select>
-        </div>
+      <div class="form-group">
+        <label class="form-label">📣 מקור</label>
+        <select id="q-source" class="form-select">
+          <option value="">— מקור —</option>
+          <option value="instagram">📸 אינסטגרם</option>
+          <option value="facebook">👤 פייסבוק</option>
+          <option value="tiktok">🎵 טיקטוק</option>
+          <option value="referral">🤝 המלצה</option>
+          <option value="website">🌐 אתר</option>
+          <option value="phone">📞 טלפון נכנס</option>
+          <option value="other">אחר</option>
+        </select>
       </div>
       <div class="form-group">
         <label class="form-label">📅 זמן שיחה</label>
@@ -664,17 +609,6 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
       <div class="form-group">
         <label class="form-label">📝 הערות</label>
         <textarea id="q-notes" class="form-input" rows="2" style="resize:none" placeholder="פרטים נוספים..."></textarea>
-      </div>
-      <div class="form-group">
-        <label class="form-label">🏷️ תגיות (אופציונלי)</label>
-        <div class="tags-row" id="q-tags-row">
-          <button type="button" class="tag-btn" data-tag="חתונה">💍 חתונה</button>
-          <button type="button" class="tag-btn" data-tag="בר מצווה">🎊 בר מצווה</button>
-          <button type="button" class="tag-btn" data-tag="בת מצווה">🎀 בת מצווה</button>
-          <button type="button" class="tag-btn" data-tag="מסיבה">🎉 מסיבה</button>
-          <button type="button" class="tag-btn" data-tag="ברית">🍼 ברית</button>
-          <button type="button" class="tag-btn" data-tag="אחר">אחר</button>
-        </div>
       </div>
       <button type="submit" class="btn btn-full" style="background:linear-gradient(135deg,var(--accent),#c2185b);color:#fff;font-size:15px;padding:13px;margin-top:4px">
         🎯 הוסף ליד
@@ -2006,7 +1940,7 @@ async function submitAdd(e) {
     notes:   document.getElementById('add-notes').value.trim(),
     tags:    [...selectedAddTags].join(','),
     source:  document.getElementById('add-source').value,
-    package: document.getElementById('add-package').value,
+    package: (document.getElementById('add-package')||{}).value||'',
   };
   if (!body.name||!body.phone){toast('מלא שם וטלפון');return;}
   let res=await apiFetch('/api/leads',{method:'POST',body:JSON.stringify(body)});
@@ -2592,7 +2526,7 @@ async function submitQuick(e) {
   const phone   = document.getElementById('q-phone').value.trim();
   const time    = document.getElementById('q-time').value;
   const source  = document.getElementById('q-source').value;
-  const pkg     = document.getElementById('q-package').value;
+  const pkg     = (document.getElementById('q-package')||{}).value||'';
   const notes   = document.getElementById('q-notes').value.trim();
   const eventD  = document.getElementById('q-event').value || '';
   const tags    = [..._qSelectedTags].join(',');
